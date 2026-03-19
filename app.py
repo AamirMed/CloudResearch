@@ -15,22 +15,26 @@ st.title("☁️ CloudResearch Patient Tracker")
 if "master_database" not in st.session_state:
     st.session_state.master_database = pd.DataFrame()
 
-# --- 3. API SETUPS ---
-GROQ_API_KEY = "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" 
+# --- 3. API SETUPS (CLOUD VAULT INTEGRATION) ---
+# The app now securely pulls your Groq key from Streamlit's hidden vault
+GROQ_API_KEY = st.secrets["GROQ_API_KEY"] 
 client = Groq(api_key=GROQ_API_KEY)
 
 GOOGLE_SHEET_NAME = "CloudResearch Live Database"
 
-# 🔄 TWO-WAY SYNC ENGINE (WITH AGGRESSIVE DEDUPLICATION)
+# 🔄 TWO-WAY SYNC ENGINE
 def sync_with_google_sheets(local_dataframe, sheet_name):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+    
+    # The app now securely pulls the Google JSON from Streamlit's hidden vault
+    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    
     google_client = gspread.authorize(creds)
     sheet = google_client.open(sheet_name).sheet1
     
-    # 1. PULL: Download as raw text
+    # PULL
     cloud_data = sheet.get_all_values()
-    
     if len(cloud_data) > 1:
         cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
     elif len(cloud_data) == 1:
@@ -38,32 +42,25 @@ def sync_with_google_sheets(local_dataframe, sheet_name):
     else:
         cloud_df = pd.DataFrame()
         
-    # 2. THE FLASHLIGHT: Force column names to match exactly
+    # FLASHLIGHT
     if not cloud_df.empty:
         cloud_df.rename(columns=lambda x: 'Patient_ID' if str(x).strip().lower() in ['patient id', 'patient_id', 'patient-id'] else x, inplace=True)
-    
     if not local_dataframe.empty:
         local_dataframe.rename(columns=lambda x: 'Patient_ID' if str(x).strip().lower() in ['patient id', 'patient_id', 'patient-id'] else x, inplace=True)
 
-    # 3. MERGE: Combine Local and Cloud aggressively
+    # MERGE
     if not local_dataframe.empty:
         combined_df = pd.concat([local_dataframe, cloud_df], ignore_index=True)
-        
-        # Force every ID to be a clean string with no hidden spaces
         combined_df['Patient_ID'] = combined_df['Patient_ID'].astype(str).str.strip()
-        
-        # Remove empty or ghost rows
         combined_df = combined_df[combined_df['Patient_ID'] != '']
         combined_df = combined_df[combined_df['Patient_ID'] != 'nan']
-        
-        # CRUSH DUPLICATES: Group by ID, keep the first value it sees
         combined_df.replace({'N/A': np.nan, 'NA': np.nan, '': np.nan, 'None': np.nan}, inplace=True)
         combined_df = combined_df.groupby('Patient_ID', as_index=False).first()
         combined_df.fillna('N/A', inplace=True)
     else:
         combined_df = cloud_df
         
-    # 4. PUSH: Wipe and upload the clean master list
+    # PUSH
     sheet.clear()
     if not combined_df.empty:
         combined_df = combined_df.astype(str)
@@ -88,7 +85,7 @@ def blueprint_decoder(image_bytes, columns, rules):
     5. Output ONLY the raw JSON format with curly braces {{}}. No markdown.
     """
     response = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct", 
+        model="llama-3.2-90b-vision-preview",
         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
     )
     raw_output = response.choices[0].message.content.strip()
@@ -116,17 +113,19 @@ with st.sidebar:
         st.session_state.master_database = pd.DataFrame()
         st.rerun()
 
-# --- 6. MAIN WORKFLOW: PATIENT BY PATIENT ---
+# --- 6. MAIN WORKFLOW: THE SELF-CLEANING FORM ---
 st.subheader("👤 Step 1: Process Current Patient")
-col1, col2 = st.columns([1, 2])
 
-with col1:
-    current_patient_id = st.text_input("Enter Patient ID / Initials:", placeholder="e.g., P-101")
+with st.form("patient_processing_form", clear_on_submit=True):
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        current_patient_id = st.text_input("Enter Patient ID / Initials:", placeholder="e.g., P-101")
+    with col2:
+        uploaded_files = st.file_uploader("Upload pages for this patient", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
 
-with col2:
-    uploaded_files = st.file_uploader(f"Upload pages for {current_patient_id if current_patient_id else 'this patient'}", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+    submitted = st.form_submit_button("⚙️ Extract Data & Save to Local Database", type="primary")
 
-if st.button("⚙️ Extract Data & Save to Local Database", type="primary"):
+if submitted:
     if not current_patient_id:
         st.error("Please enter a Patient ID first!")
     elif not uploaded_files:
@@ -136,7 +135,7 @@ if st.button("⚙️ Extract Data & Save to Local Database", type="primary"):
         expected_cols = [c.strip() for c in column_headers.split(',')]
         
         for file in uploaded_files:
-            with st.spinner(f"Reading page: {file.name}..."):
+            with st.spinner(f"AI is reading {file.name}..."):
                 raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules)
                 try:
                     ai_data = json.loads(raw_json)
@@ -144,7 +143,7 @@ if st.button("⚙️ Extract Data & Save to Local Database", type="primary"):
                     df = pd.DataFrame([filtered_data])
                     patient_dfs.append(df)
                 except Exception as e:
-                    st.error(f"Could not read {file.name}.")
+                    st.error(f"Could not read {file.name}. Ensure it is a clear image.")
         
         if patient_dfs:
             current_batch_df = pd.concat(patient_dfs, ignore_index=True)
