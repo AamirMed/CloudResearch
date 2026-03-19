@@ -6,6 +6,8 @@ import json
 from groq import Groq
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
+from PIL import Image
+import io
 
 # --- 1. UI SETUP ---
 st.set_page_config(page_title="CloudResearch AI", layout="wide", page_icon="☁️")
@@ -16,7 +18,6 @@ if "master_database" not in st.session_state:
     st.session_state.master_database = pd.DataFrame()
 
 # --- 3. API SETUPS (CLOUD VAULT INTEGRATION) ---
-# The app now securely pulls your Groq key from Streamlit's hidden vault
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"] 
 client = Groq(api_key=GROQ_API_KEY)
 
@@ -25,15 +26,12 @@ GOOGLE_SHEET_NAME = "CloudResearch Live Database"
 # 🔄 TWO-WAY SYNC ENGINE
 def sync_with_google_sheets(local_dataframe, sheet_name):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # The app now securely pulls the Google JSON from Streamlit's hidden vault
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     
     google_client = gspread.authorize(creds)
     sheet = google_client.open(sheet_name).sheet1
     
-    # PULL
     cloud_data = sheet.get_all_values()
     if len(cloud_data) > 1:
         cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
@@ -42,13 +40,11 @@ def sync_with_google_sheets(local_dataframe, sheet_name):
     else:
         cloud_df = pd.DataFrame()
         
-    # FLASHLIGHT
     if not cloud_df.empty:
         cloud_df.rename(columns=lambda x: 'Patient_ID' if str(x).strip().lower() in ['patient id', 'patient_id', 'patient-id'] else x, inplace=True)
     if not local_dataframe.empty:
         local_dataframe.rename(columns=lambda x: 'Patient_ID' if str(x).strip().lower() in ['patient id', 'patient_id', 'patient-id'] else x, inplace=True)
 
-    # MERGE
     if not local_dataframe.empty:
         combined_df = pd.concat([local_dataframe, cloud_df], ignore_index=True)
         combined_df['Patient_ID'] = combined_df['Patient_ID'].astype(str).str.strip()
@@ -60,7 +56,6 @@ def sync_with_google_sheets(local_dataframe, sheet_name):
     else:
         combined_df = cloud_df
         
-    # PUSH
     sheet.clear()
     if not combined_df.empty:
         combined_df = combined_df.astype(str)
@@ -69,9 +64,21 @@ def sync_with_google_sheets(local_dataframe, sheet_name):
     
     return combined_df
 
-# --- 4. THE BLUEPRINT DECODER ---
+# --- 4. THE BLUEPRINT DECODER (NOW WITH COMPRESSOR) ---
+def compress_image(image_bytes):
+    img = Image.open(io.BytesIO(image_bytes))
+    if img.mode != 'RGB':
+        img = img.convert('RGB')
+    img.thumbnail((1024, 1024)) # Shrink massive phone photos
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=85)
+    return output.getvalue()
+
 def blueprint_decoder(image_bytes, columns, rules):
-    base64_image = base64.b64encode(image_bytes).decode('utf-8')
+    # 1. Compress the raw upload first
+    compressed_bytes = compress_image(image_bytes)
+    base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
+    
     prompt = f"""
     Extract data from this medical document.
     REQUIRED EXACT KEYS: [{columns}]
@@ -136,14 +143,14 @@ if submitted:
         
         for file in uploaded_files:
             with st.spinner(f"AI is reading {file.name}..."):
-                raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules)
                 try:
+                    raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules)
                     ai_data = json.loads(raw_json)
                     filtered_data = {col: ai_data.get(col, ai_data.get(f"{col}:", 'N/A')) for col in expected_cols}
                     df = pd.DataFrame([filtered_data])
                     patient_dfs.append(df)
                 except Exception as e:
-                    st.error(f"Could not read {file.name}. Ensure it is a clear image.")
+                    st.error(f"Could not read {file.name}. Ensure it is a clear image. Error details: {e}")
         
         if patient_dfs:
             current_batch_df = pd.concat(patient_dfs, ignore_index=True)
