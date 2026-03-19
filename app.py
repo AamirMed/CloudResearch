@@ -176,4 +176,18 @@ with col_x:
     if st.button("🌐 TWO-WAY SYNC (Pull & Push Google Sheets)", type="primary", use_container_width=True):
         with st.spinner("Connecting to Google Cloud..."):
             try:
-                merged_data = sync_with_google_
+                merged_data = sync_with_google_sheets(st.session_state.master_database, GOOGLE_SHEET_NAME)
+                st.session_state.master_database = merged_data
+                st.success("✅ Sync Complete! The cloud and your app are now identical.")
+            except Exception as e:
+                st.error(f"❌ Sync Failed. Check credentials.json and sharing settings. Error: {e}")
+
+with col_y:
+    if not st.session_state.master_database.empty:
+        csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Offline CSV", data=csv_data, file_name="Offline_Research.csv", mime="text/csv", use_container_width=True)
+
+if not st.session_state.master_database.empty:
+    st.dataframe(st.session_state.master_database, use_container_width=True)
+else:
+    st.info("The database is currently empty. Process a patient or click Sync to download existing cloud data.")
