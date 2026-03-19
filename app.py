@@ -217,4 +217,40 @@ if not st.session_state.master_database.empty:
         st.write("Compare how one variable interacts with another (e.g., Flora vs. Antibiotic Resistance).")
         col_a, col_b = st.columns(2)
         with col_a:
-            x_axis = st.selectbox("X-Axis (Primary Group):",
+            x_axis = st.selectbox("X-Axis (Primary Group):", [""] + all_cols, key="x_axis")
+        with col_b:
+            y_axis = st.selectbox("Color Grouping (Sub-category):", [""] + all_cols, key="y_axis")
+            
+        if x_axis and y_axis:
+            df_clean2 = st.session_state.master_database[(st.session_state.master_database[x_axis] != 'N/A') & (st.session_state.master_database[y_axis] != 'N/A')]
+            
+            if not df_clean2.empty:
+                compare_counts = df_clean2.groupby([x_axis, y_axis]).size().reset_index(name='Count')
+                fig2 = px.bar(compare_counts, x=x_axis, y='Count', color=y_axis, barmode='group', title=f"{y_axis} grouped by {x_axis}")
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.warning("Not enough overlapping data to compare these two variables yet.")
+
+# --- 9. CLOUD SYNC ---
+st.divider()
+st.subheader("🌐 Step 4: Finalize & Sync")
+
+col_x, col_y = st.columns([1, 1])
+
+with col_x:
+    if st.button("🚀 PUSH TO GOOGLE CLOUD", type="primary", use_container_width=True):
+        with st.spinner("Syncing secure data..."):
+            if not user_sheet_url or not project_tab:
+                st.error("❌ Please fill out the Google Sheet URL and Tab Name in the sidebar!")
+            else:
+                try:
+                    merged_data = sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab)
+                    st.session_state.master_database = merged_data
+                    st.success(f"✅ Sync Complete! Data secured in '{project_tab}'.")
+                except Exception as e:
+                    st.error(f"❌ Sync Failed. Check URL and Tab name. Error: {e}")
+
+with col_y:
+    if not st.session_state.master_database.empty:
+        csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name="Clinical_Data.csv", mime="text/csv", use_container_width=True)
