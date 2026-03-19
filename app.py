@@ -64,12 +64,12 @@ def sync_with_google_sheets(local_dataframe, sheet_name):
     
     return combined_df
 
-# --- 4. THE BLUEPRINT DECODER (NOW WITH COMPRESSOR) ---
+# --- 4. THE BLUEPRINT DECODER (NOW WITH HIGH-RES COMPRESSOR) ---
 def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    img.thumbnail((1024, 1024)) 
+    img.thumbnail((2048, 2048)) # <--- THE 2048 UPGRADE
     output = io.BytesIO()
     img.save(output, format="JPEG", quality=85)
     return output.getvalue()
@@ -91,7 +91,7 @@ def blueprint_decoder(image_bytes, columns, rules):
     5. Output ONLY the raw JSON format with curly braces {{}}. No markdown.
     """
     response = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct", # <-- THE NEW ENGINE
+        model="meta-llama/llama-4-scout-17b-16e-instruct", 
         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
     )
     raw_output = response.choices[0].message.content.strip()
@@ -145,7 +145,11 @@ if submitted:
                 try:
                     raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules)
                     ai_data = json.loads(raw_json)
-                    filtered_data = {col: ai_data.get(col, ai_data.get(f"{col}:", 'N/A')) for col in expected_cols}
+                    
+                    filtered_data = {}
+                    for col in expected_cols:
+                        filtered_data[col] = ai_data.get(col, ai_data.get(f"{col}:", 'N/A'))
+                        
                     df = pd.DataFrame([filtered_data])
                     patient_dfs.append(df)
                 except Exception as e:
@@ -172,18 +176,4 @@ with col_x:
     if st.button("🌐 TWO-WAY SYNC (Pull & Push Google Sheets)", type="primary", use_container_width=True):
         with st.spinner("Connecting to Google Cloud..."):
             try:
-                merged_data = sync_with_google_sheets(st.session_state.master_database, GOOGLE_SHEET_NAME)
-                st.session_state.master_database = merged_data
-                st.success("✅ Sync Complete! The cloud and your app are now identical.")
-            except Exception as e:
-                st.error(f"❌ Sync Failed. Check credentials.json and sharing settings. Error: {e}")
-
-with col_y:
-    if not st.session_state.master_database.empty:
-        csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Offline CSV", data=csv_data, file_name="Offline_Research.csv", mime="text/csv", use_container_width=True)
-
-if not st.session_state.master_database.empty:
-    st.dataframe(st.session_state.master_database, use_container_width=True)
-else:
-    st.info("The database is currently empty. Process a patient or click Sync to download existing cloud data.")
+                merged_data = sync_with_google_
