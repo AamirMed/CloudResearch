@@ -5,3 +5,4 @@ groq
 gspread
 oauth2client
 Pillow
+plotly
