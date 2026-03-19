@@ -22,7 +22,7 @@ if "master_database" not in st.session_state:
 GROQ_API_KEY = st.secrets["GROQ_API_KEY"] 
 client = Groq(api_key=GROQ_API_KEY)
 
-# 🔄 TWO-WAY SYNC ENGINE
+# 🔄 TWO-WAY SYNC ENGINE (Multi-User & Multi-Project)
 def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
@@ -50,7 +50,8 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
         combined_df = combined_df[combined_df['Patient_ID'] != '']
         combined_df = combined_df[combined_df['Patient_ID'] != 'nan']
         combined_df.replace({'N/A': np.nan, 'NA': np.nan, '': np.nan, 'None': np.nan}, inplace=True)
-        combined_df = combined_df.groupby('Patient_ID', as_index=False).first()
+        # Keeps the most recently updated version of a patient's data
+        combined_df = combined_df.groupby('Patient_ID', as_index=False).last()
         combined_df.fillna('N/A', inplace=True)
     else:
         combined_df = cloud_df
@@ -63,7 +64,7 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
     
     return combined_df
 
-# --- 4. THE BLUEPRINT DECODER ---
+# --- 4. THE BLUEPRINT DECODER (HIGH-RES) ---
 def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     if img.mode != 'RGB':
@@ -160,7 +161,7 @@ if submitted:
             
             st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
             st.session_state.master_database.replace({'N/A': np.nan, 'NA': np.nan, '': np.nan, 'None': np.nan}, inplace=True)
-            st.session_state.master_database = st.session_state.master_database.groupby('Patient_ID', as_index=False).first()
+            st.session_state.master_database = st.session_state.master_database.groupby('Patient_ID', as_index=False).last()
             st.session_state.master_database.fillna('N/A', inplace=True)
             st.success(f"✅ Patient {current_patient_id} processed!")
 
@@ -178,71 +179,42 @@ if not st.session_state.master_database.empty:
         key="data_verifier"
     )
 
-# --- 8. LIVE RESEARCH DASHBOARD ---
+# --- 8. LIVE RESEARCH DASHBOARD (UNIVERSAL UPGRADE) ---
 if not st.session_state.master_database.empty:
     st.divider()
-    st.subheader("📈 Step 3: Live Clinical Dashboard")
+    st.subheader("📈 Step 3: Dynamic Data Explorer")
+    st.info("Visualize your data instantly. The charts automatically adapt to your custom clinical columns.")
     
-    tab1, tab2 = st.tabs(["🦠 Microbiological Flora", "💊 Antibiotic Sensitivity Profiles"])
+    # Get all columns except the Patient ID
+    all_cols = [c for c in st.session_state.master_database.columns if c != "Patient_ID"]
+    
+    tab1, tab2 = st.tabs(["📊 Distribution (Single Variable)", "🔄 Cross-Analysis (Two Variables)"])
     
     with tab1:
-        st.write("### Identified Organisms")
-        all_cols = st.session_state.master_database.columns.tolist()
-        # Let the user pick which column holds the Organism data
-        org_col = st.selectbox("Select the 'Organism/Flora' column:", [""] + all_cols)
-        
-        if org_col:
-            pie_data = st.session_state.master_database[org_col].value_counts().reset_index()
-            pie_data.columns = [org_col, 'Count']
-            pie_data = pie_data[(pie_data[org_col] != 'N/A') & (pie_data[org_col] != '')]
+        col_x, col_type = st.columns([2, 1])
+        with col_x:
+            var_1 = st.selectbox("Select variable to analyze:", [""] + all_cols, key="var1")
+        with col_type:
+            chart_type = st.selectbox("Chart Type:", ["Bar Chart", "Pie Chart"])
             
-            if not pie_data.empty:
-                fig_pie = px.pie(pie_data, names=org_col, values='Count', hole=0.4, color_discrete_sequence=px.colors.sequential.Teal)
-                st.plotly_chart(fig_pie, use_container_width=True)
+        if var_1:
+            # Clean out N/A values for graphing
+            df_clean = st.session_state.master_database[st.session_state.master_database[var_1] != 'N/A']
+            val_counts = df_clean[var_1].value_counts().reset_index()
+            val_counts.columns = [var_1, 'Count']
+            
+            if not val_counts.empty:
+                if chart_type == "Bar Chart":
+                    fig1 = px.bar(val_counts, x=var_1, y='Count', color=var_1, title=f"Distribution of {var_1}")
+                    st.plotly_chart(fig1, use_container_width=True)
+                else:
+                    fig1 = px.pie(val_counts, names=var_1, values='Count', title=f"Breakdown of {var_1}", hole=0.3)
+                    st.plotly_chart(fig1, use_container_width=True)
             else:
-                st.warning("No data available to chart for this column yet.")
+                st.warning(f"No valid data to plot for {var_1} yet.")
 
     with tab2:
-        st.write("### Resistance & Sensitivity Tracker")
-        # Let the user select multiple antibiotics to compare
-        anti_cols = st.multiselect("Select Antibiotic columns to analyze:", all_cols)
-        
-        if anti_cols:
-            melted_df = pd.melt(st.session_state.master_database, id_vars=['Patient_ID'], value_vars=anti_cols, var_name='Antibiotic', value_name='Result')
-            # Normalize text for the chart
-            melted_df['Result'] = melted_df['Result'].str.strip().str.title()
-            valid_results = ['Sensitive', 'Resistant', 'Intermediate', 'S', 'R', 'I']
-            melted_df = melted_df[melted_df['Result'].isin(valid_results)]
-            
-            if not melted_df.empty:
-                bar_data = melted_df.groupby(['Antibiotic', 'Result']).size().reset_index(name='Count')
-                color_map = {'Sensitive': '#2ECC71', 'S': '#2ECC71', 'Resistant': '#E74C3C', 'R': '#E74C3C', 'Intermediate': '#F1C40F', 'I': '#F1C40F'}
-                
-                fig_bar = px.bar(bar_data, x='Antibiotic', y='Count', color='Result', barmode='group', color_discrete_map=color_map)
-                st.plotly_chart(fig_bar, use_container_width=True)
-            else:
-                st.info("No valid 'Sensitive' or 'Resistant' markers found in the selected columns yet.")
-
-# --- 9. CLOUD SYNC ---
-st.divider()
-st.subheader("🌐 Step 4: Finalize & Sync")
-
-col_x, col_y = st.columns([1, 1])
-
-with col_x:
-    if st.button("🚀 PUSH TO GOOGLE CLOUD", type="primary", use_container_width=True):
-        with st.spinner("Syncing secure data..."):
-            if not user_sheet_url or not project_tab:
-                st.error("❌ Please fill out the Google Sheet URL and Tab Name in the sidebar!")
-            else:
-                try:
-                    merged_data = sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab)
-                    st.session_state.master_database = merged_data
-                    st.success(f"✅ Sync Complete! Data secured in '{project_tab}'.")
-                except Exception as e:
-                    st.error(f"❌ Sync Failed. Error: {e}")
-
-with col_y:
-    if not st.session_state.master_database.empty:
-        csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-        st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name="Clinical_Data.csv", mime="text/csv", use_container_width=True)
+        st.write("Compare how one variable interacts with another (e.g., Flora vs. Antibiotic Resistance).")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            x_axis = st.selectbox("X-Axis (Primary Group):",
