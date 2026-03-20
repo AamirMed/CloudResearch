@@ -6,3 +6,4 @@ gspread
 oauth2client
 Pillow
 plotly
+streamlit-authenticator
