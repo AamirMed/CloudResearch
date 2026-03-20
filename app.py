@@ -21,7 +21,6 @@ def get_google_sheet_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# NEW EXPLICIT PUSH/PULL ENGINE
 def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     google_client = get_google_sheet_client()
     
@@ -31,7 +30,6 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
         spreadsheet = google_client.open_by_url(sheet_url)
         sheet = spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="20")
     
-    # ⬇️ PULL MODE: Just grab the data from Google and format the IDs
     if mode == "pull":
         cloud_data = sheet.get_all_values()
         if len(cloud_data) > 1:
@@ -59,7 +57,6 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
                     cloud_df.loc[missing_mask, 'System_ID'] = new_ids
         return cloud_df
 
-    # ⬆️ PUSH MODE: Completely overwrite Google Sheets with the Local App Data
     elif mode == "push":
         sheet.clear()
         if not local_dataframe.empty:
@@ -68,6 +65,10 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
             cols = ['System_ID'] + [c for c in df_to_upload.columns if c != 'System_ID']
             df_to_upload = df_to_upload[cols]
             data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
+            sheet.update(range_name="A1", values=data_to_upload)
+        else:
+            # If the dataframe is completely empty but has columns (headers), push the headers!
+            data_to_upload = [local_dataframe.columns.values.tolist()]
             sheet.update(range_name="A1", values=data_to_upload)
         return local_dataframe
 
@@ -149,12 +150,21 @@ elif auth_status == True:
     saved_sheet_url = user_prefs.get("sheet_url", "")
     saved_schema = user_prefs.get("default_schema", "Age, Gender, Organism")
 
+    # Initialize the dynamic text box memory
+    if "schema_input" not in st.session_state:
+        st.session_state.schema_input = saved_schema
+
     if "master_database" not in st.session_state:
         st.session_state.master_database = pd.DataFrame()
         if saved_sheet_url and username:
             try:
-                # Silently pull fresh data on login
-                st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username, mode="pull")
+                pulled_df = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username, mode="pull")
+                st.session_state.master_database = pulled_df
+                # SILENT PULL ON LOGIN: Update the text box with Cloud Columns
+                if not pulled_df.empty:
+                    pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
+                    if pulled_cols:
+                        st.session_state.schema_input = ", ".join(pulled_cols)
             except Exception:
                 pass 
 
@@ -165,7 +175,10 @@ elif auth_status == True:
         
         st.header("📋 1. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
-        column_headers = st.text_input("Exact Clinical Columns:", saved_schema)
+        
+        # This text box is now dynamically linked to the "schema_input" memory
+        st.text_input("Exact Clinical Columns:", key="schema_input")
+        
         extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
         
         st.divider()
@@ -190,7 +203,9 @@ elif auth_status == True:
         index=0
     )
     st.divider()
-    expected_cols = [c.strip() for c in column_headers.split(',')]
+    
+    # We dynamically read whatever is currently in the text box
+    expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
     if "Single Patient" in entry_mode:
         st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
@@ -203,7 +218,7 @@ elif auth_status == True:
                 master_patient_data = {col: 'N/A' for col in expected_cols}
                 for file in uploaded_files:
                     try:
-                        raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules, st.secrets["GROQ_API_KEY"])
+                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
                         ai_data_list = json.loads(raw_json) 
                         if isinstance(ai_data_list, list) and len(ai_data_list) > 0:
                             ai_data = ai_data_list[0] 
@@ -250,7 +265,7 @@ elif auth_status == True:
                 with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
                     try:
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
-                        raw_json = blueprint_decoder(file.getvalue(), column_headers, roster_rules, st.secrets["GROQ_API_KEY"])
+                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, st.secrets["GROQ_API_KEY"])
                         ai_data_list = json.loads(raw_json) 
                         
                         if isinstance(ai_data_list, dict):
@@ -304,7 +319,7 @@ elif auth_status == True:
                 for file in update_files:
                     with st.spinner(f"Reading new data for {target_id}..."):
                         try:
-                            raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules, st.secrets["GROQ_API_KEY"])
+                            raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
                             ai_data = json.loads(raw_json)
                             if isinstance(ai_data, list) and len(ai_data) > 0:
                                 ai_data = ai_data[0] 
@@ -333,33 +348,55 @@ elif auth_status == True:
             key="data_verifier"
         )
 
-    # --- 7. CLOUD SYNC (NEW EXPLICIT BUTTONS) ---
+    # --- 7. CLOUD SYNC (DYNAMIC SCHEMA PUSH/PULL) ---
     st.divider()
     st.subheader("🌐 Step 3: Finalize & Sync")
     col_x, col_y, col_z = st.columns([1, 1, 1])
 
     with col_x:
         if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
-            with st.spinner("Overwriting Cloud with your Local Data..."):
+            with st.spinner("Aligning Columns and Overwriting Cloud..."):
                 if not user_sheet_url or not project_tab:
                     st.error("❌ Please ensure your Database Connection is filled out.")
                 else:
                     try:
+                        # 1. We forcefully construct the exact columns from the text box
+                        final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
+                        
+                        # 2. We align our local dataframe to exactly match those columns
+                        if st.session_state.master_database.empty:
+                            st.session_state.master_database = pd.DataFrame(columns=final_cols)
+                        else:
+                            for col in final_cols:
+                                if col not in st.session_state.master_database.columns:
+                                    st.session_state.master_database[col] = 'N/A' # Add new columns
+                            # This drops any deleted columns and puts them in the correct order!
+                            st.session_state.master_database = st.session_state.master_database[final_cols]
+
+                        # 3. Push the newly aligned data to Google
                         sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
-                        st.toast("✅ Cloud Updated Successfully!", icon="☁️")
+                        st.toast("✅ Cloud Updated with New Columns!", icon="☁️")
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Push Failed. Error: {e}")
 
     with col_y:
         if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
-            with st.spinner("Downloading Fresh Cloud Data..."):
+            with st.spinner("Reading Google Sheet Columns..."):
                 if not user_sheet_url or not project_tab:
                     st.error("❌ Please ensure your Database Connection is filled out.")
                 else:
                     try:
-                        st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
-                        st.toast("✅ Local Data Refreshed!", icon="⬇️")
+                        pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                        st.session_state.master_database = pulled_df
+                        
+                        # 4. We grab the columns from Google and overwrite the Text Box
+                        if not pulled_df.empty:
+                            pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
+                            if pulled_cols:
+                                st.session_state.schema_input = ", ".join(pulled_cols)
+                                
+                        st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
                         st.rerun()
                     except Exception as e:
                         st.error(f"❌ Pull Failed. Error: {e}")
