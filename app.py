@@ -30,7 +30,6 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
         spreadsheet = google_client.open_by_url(sheet_url)
         sheet = spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="20")
     
-    # 1. PULL CLOUD DATA
     cloud_data = sheet.get_all_values()
     if len(cloud_data) > 1:
         cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
@@ -39,15 +38,12 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
     else:
         cloud_df = pd.DataFrame()
 
-    # 2. GRANDFATHER IN OLD DATA (Assign IDs to existing Google Sheet rows)
     if not cloud_df.empty:
-        # Standardize the ID column name
         cloud_df.rename(columns=lambda x: 'System_ID' if str(x).strip().lower() in ['system_id', 'system id'] else x, inplace=True)
         
         if 'System_ID' not in cloud_df.columns:
             cloud_df.insert(0, 'System_ID', [f"CR-{1000 + i}" for i in range(len(cloud_df))])
         else:
-            # Fill in any blanks for rows that were typed manually into Google Sheets
             missing_mask = cloud_df['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
             if missing_mask.any():
                 valid_ids = cloud_df.loc[~missing_mask, 'System_ID'].astype(str).str.extract(r'(\d+)').dropna().astype(int)
@@ -59,20 +55,17 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
                     start_val += 1
                 cloud_df.loc[missing_mask, 'System_ID'] = new_ids
 
-    # 3. MERGE CLOUD AND LOCAL
     if not local_dataframe.empty:
         combined_df = pd.concat([cloud_df, local_dataframe], ignore_index=True)
         combined_df['System_ID'] = combined_df['System_ID'].astype(str).str.strip()
         combined_df = combined_df[combined_df['System_ID'] != '']
         combined_df = combined_df[combined_df['System_ID'] != 'nan']
         combined_df.replace({'N/A': np.nan, 'NA': np.nan, '': np.nan, 'None': np.nan}, inplace=True)
-        # Keep the most recently edited version if there are duplicates
         combined_df = combined_df.groupby('System_ID', as_index=False).last() 
         combined_df.fillna('N/A', inplace=True)
     else:
         combined_df = cloud_df
         
-    # 4. PUSH BACK TO CLOUD
     sheet.clear()
     if not combined_df.empty:
         combined_df = combined_df.astype(str)
@@ -146,7 +139,6 @@ elif auth_status == None:
     st.warning("🔒 Please enter your username and password to access the Command Center.")
 
 elif auth_status == True:
-    # 🎉 THEY ARE LOGGED IN! THE APP UNLOCKS.
     username = st.session_state.get("username")
     name = st.session_state.get("name")
     
@@ -154,15 +146,13 @@ elif auth_status == True:
     saved_sheet_url = user_prefs.get("sheet_url", "")
     saved_schema = user_prefs.get("default_schema", "Age, Gender, Organism")
 
-    # --- AUTO-SYNC ON LOGIN ---
     if "master_database" not in st.session_state:
         st.session_state.master_database = pd.DataFrame()
         if saved_sheet_url and username:
             try:
-                # Silently fetch the Google Sheet into memory immediately
                 st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username)
             except Exception:
-                pass # If it fails on first load, just proceed with empty memory
+                pass 
 
     with st.sidebar:
         st.success(f"Welcome back, {name}!")
@@ -190,35 +180,48 @@ elif auth_status == True:
 
     # --- 5. DATA ENTRY MODE ---
     st.subheader("📸 Step 1: Data Entry Mode")
-    entry_mode = st.radio("Select your workflow:", ["🆕 Add New Patients", "🔄 Update Existing Patient"], index=0)
+    entry_mode = st.radio("Select your workflow:", ["🆕 Add New Patient (Merge Pages)", "🔄 Update Existing Patient"], index=0)
     st.divider()
     expected_cols = [c.strip() for c in column_headers.split(',')]
 
     if "Add New" in entry_mode:
-        st.info("Upload rosters or reports. The app will generate unique IDs automatically.")
+        st.info("Upload all pages for a single patient. The AI will merge the data into ONE profile and assign ONE ID.")
         with st.form("add_new_form", clear_on_submit=True):
             uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-            submitted = st.form_submit_button("⚙️ Extract & Generate IDs", type="primary")
+            submitted = st.form_submit_button("⚙️ Extract & Generate ID", type="primary")
 
         if submitted and uploaded_files:
-            patient_dfs = []
-            for file in uploaded_files:
-                with st.spinner(f"AI is reading {file.name}..."):
+            with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
+                
+                # Create a blank slate for the single patient
+                master_patient_data = {col: 'N/A' for col in expected_cols}
+                
+                for file in uploaded_files:
                     try:
                         raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules, st.secrets["GROQ_API_KEY"])
                         ai_data_list = json.loads(raw_json) 
-                        if isinstance(ai_data_list, dict):
-                            ai_data_list = [ai_data_list] 
-                        for patient_data in ai_data_list:
-                            filtered_data = {col: patient_data.get(col, patient_data.get(f"{col}:", 'N/A')) for col in expected_cols}
-                            patient_dfs.append(pd.DataFrame([filtered_data]))
+                        
+                        if isinstance(ai_data_list, list) and len(ai_data_list) > 0:
+                            ai_data = ai_data_list[0] 
+                        elif isinstance(ai_data_list, dict):
+                            ai_data = ai_data_list
+                        else:
+                            ai_data = {}
+
+                        # THE SMART MERGE LOGIC: Add data if we haven't found it yet
+                        for col in expected_cols:
+                            new_val = str(ai_data.get(col, ai_data.get(f"{col}:", 'N/A'))).strip()
+                            if new_val not in ['N/A', 'nan', '', 'None']:
+                                if master_patient_data[col] == 'N/A':
+                                    master_patient_data[col] = new_val
+                                    
                     except Exception as e:
                         st.error(f"Could not read {file.name}. Error: {e}")
-            
-            if patient_dfs:
-                current_batch_df = pd.concat(patient_dfs, ignore_index=True)
                 
-                # --- SMARTER ID GENERATION ---
+                # Turn the single merged profile into a row
+                current_batch_df = pd.DataFrame([master_patient_data])
+                
+                # Generate exactly ONE System_ID
                 if st.session_state.master_database.empty or 'System_ID' not in st.session_state.master_database.columns:
                     start_num = 1000
                 else:
@@ -226,14 +229,14 @@ elif auth_status == True:
                     nums = existing_ids.str.extract(r'(\d+)').dropna().astype(int)
                     start_num = int(nums.max()[0]) + 1 if not nums.empty else 1000
                 
-                new_ids = [f"CR-{start_num + i}" for i in range(len(current_batch_df))]
-                current_batch_df.insert(0, "System_ID", new_ids)
+                new_id = f"CR-{start_num}"
+                current_batch_df.insert(0, "System_ID", [new_id])
                 
                 if not st.session_state.master_database.empty:
                     st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
                 else:
                     st.session_state.master_database = current_batch_df
-                st.success(f"✅ Extracted {len(current_batch_df)} new patients! IDs assigned: {new_ids[0]} to {new_ids[-1]}")
+                st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
 
     elif "Update" in entry_mode:
         st.info("Check your Google Sheet for the patient's 'System_ID'. Type it below to add new data.")
@@ -258,13 +261,17 @@ elif auth_status == True:
                         try:
                             raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules, st.secrets["GROQ_API_KEY"])
                             ai_data = json.loads(raw_json)
-                            if isinstance(ai_data, list):
+                            if isinstance(ai_data, list) and len(ai_data) > 0:
                                 ai_data = ai_data[0] 
+                            elif isinstance(ai_data, dict):
+                                pass
+                            else:
+                                ai_data = {}
                             
                             idx = st.session_state.master_database.index[st.session_state.master_database['System_ID'] == target_id].tolist()[0]
                             for col in expected_cols:
-                                new_val = ai_data.get(col, 'N/A')
-                                if new_val != 'N/A': 
+                                new_val = str(ai_data.get(col, 'N/A')).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']: 
                                     st.session_state.master_database.at[idx, col] = new_val
                             st.success(f"✅ Profile {target_id} successfully updated!")
                         except Exception as e:
