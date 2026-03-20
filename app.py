@@ -91,7 +91,9 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
-    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}]. NO markdown, NO conversational text. ONLY output the raw JSON."
+    
+    # We explicitly tell the AI to create an array of MULTIPLE patients if it sees them.
+    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. NO markdown, NO conversational text. ONLY output the raw JSON array."
     
     response = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct", 
@@ -100,13 +102,11 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     
     raw_output = response.choices[0].message.content.strip()
     
-    # --- THE SILENCER: Aggressively strip markdown and conversational text ---
     if "```json" in raw_output:
         raw_output = raw_output.split("```json")[1]
     if "```" in raw_output:
         raw_output = raw_output.split("```")[0]
         
-    # Hunt for the first bracket/brace to isolate the data
     match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
     clean_json = match.group(1) if match else raw_output.strip()
     
@@ -190,26 +190,30 @@ elif auth_status == True:
 
     # --- 5. DATA ENTRY MODE ---
     st.subheader("📸 Step 1: Data Entry Mode")
-    entry_mode = st.radio("Select your workflow:", ["🆕 Add New Patient (Merge Pages)", "🔄 Update Existing Patient"], index=0)
+    
+    # NEW: Three options for workflow!
+    entry_mode = st.radio(
+        "Select your workflow:", 
+        ["🆕 Single Patient (Merge Pages)", "📋 Multiple Patients (Roster)", "🔄 Update Existing"], 
+        index=0
+    )
     st.divider()
     expected_cols = [c.strip() for c in column_headers.split(',')]
 
-    if "Add New" in entry_mode:
-        st.info("Upload all pages for a single patient. The AI will merge the data into ONE profile and assign ONE ID.")
-        with st.form("add_new_form", clear_on_submit=True):
+    # WORKFLOW 1: Merge multiple pages into ONE patient
+    if "Single Patient" in entry_mode:
+        st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
+        with st.form("add_single_form", clear_on_submit=True):
             uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-            submitted = st.form_submit_button("⚙️ Extract & Generate ID", type="primary")
+            submitted = st.form_submit_button("⚙️ Extract & Generate 1 ID", type="primary")
 
         if submitted and uploaded_files:
             with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
-                
                 master_patient_data = {col: 'N/A' for col in expected_cols}
-                
                 for file in uploaded_files:
                     try:
                         raw_json = blueprint_decoder(file.getvalue(), column_headers, extra_rules, st.secrets["GROQ_API_KEY"])
                         ai_data_list = json.loads(raw_json) 
-                        
                         if isinstance(ai_data_list, list) and len(ai_data_list) > 0:
                             ai_data = ai_data_list[0] 
                         elif isinstance(ai_data_list, dict):
@@ -222,7 +226,6 @@ elif auth_status == True:
                             if new_val not in ['N/A', 'nan', '', 'None']:
                                 if master_patient_data[col] == 'N/A':
                                     master_patient_data[col] = new_val
-                                    
                     except Exception as e:
                         st.error(f"Could not read {file.name}. Error: {e}")
                 
@@ -244,6 +247,59 @@ elif auth_status == True:
                     st.session_state.master_database = current_batch_df
                 st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
 
+    # WORKFLOW 2: Extract MANY patients from a single Roster
+    elif "Multiple Patients" in entry_mode:
+        st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
+        with st.form("add_multiple_form", clear_on_submit=True):
+            uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+            submitted = st.form_submit_button("⚙️ Extract Roster & Generate IDs", type="primary")
+
+        if submitted and uploaded_files:
+            patient_dfs = []
+            for file in uploaded_files:
+                with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
+                    try:
+                        # Give the AI a strict reminder to pull everyone
+                        roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
+                        raw_json = blueprint_decoder(file.getvalue(), column_headers, roster_rules, st.secrets["GROQ_API_KEY"])
+                        ai_data_list = json.loads(raw_json) 
+                        
+                        # Ensure we always have a list to loop through
+                        if isinstance(ai_data_list, dict):
+                            ai_data_list = [ai_data_list]
+                            
+                        # Loop through EVERY patient the AI found on the paper
+                        for patient_data in ai_data_list:
+                            filtered_data = {col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip() for col in expected_cols}
+                            
+                            # Only add them if the AI actually found real data (ignores blank rows)
+                            if any(val not in ['N/A', 'nan', '', 'None'] for val in filtered_data.values()):
+                                patient_dfs.append(pd.DataFrame([filtered_data]))
+                                
+                    except Exception as e:
+                        st.error(f"Could not read {file.name}. Error: {e}")
+            
+            if patient_dfs:
+                current_batch_df = pd.concat(patient_dfs, ignore_index=True)
+                
+                if st.session_state.master_database.empty or 'System_ID' not in st.session_state.master_database.columns:
+                    start_num = 1000
+                else:
+                    existing_ids = st.session_state.master_database['System_ID'].astype(str)
+                    nums = existing_ids.str.extract(r'(\d+)').dropna().astype(int)
+                    start_num = int(nums.max()[0]) + 1 if not nums.empty else 1000
+                
+                # Generate a unique ID for every single row the AI found
+                new_ids = [f"CR-{start_num + i}" for i in range(len(current_batch_df))]
+                current_batch_df.insert(0, "System_ID", new_ids)
+                
+                if not st.session_state.master_database.empty:
+                    st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
+                else:
+                    st.session_state.master_database = current_batch_df
+                st.success(f"✅ Extracted {len(current_batch_df)} patients from the roster! IDs assigned: {new_ids[0]} to {new_ids[-1]}")
+
+    # WORKFLOW 3: Update existing
     elif "Update" in entry_mode:
         st.info("Check your Google Sheet for the patient's 'System_ID'. Type it below to add new data.")
         with st.form("update_form", clear_on_submit=True):
