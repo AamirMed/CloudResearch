@@ -10,7 +10,6 @@ import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import io
-import plotly.express as px
 
 # --- 1. UI SETUP ---
 st.set_page_config(page_title="CloudResearch Command Center", layout="wide", page_icon="☁️")
@@ -78,7 +77,7 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}, {{...}}]. The keys MUST exactly match the REQUIRED KEYS. If a value is missing, output 'N/A'."
     
     response = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct", 
+        model="llama3-8b-8192", 
         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
     )
     
@@ -86,18 +85,25 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     match = re.search(r'\[.*\]', raw_output, re.DOTALL)
     return match.group(0) if match else raw_output
 
-# --- 3. AUTHENTICATION GATEKEEPER ---
+# --- 3. AUTHENTICATION GATEKEEPER (New strict format) ---
 try:
-    creds = dict(st.secrets["credentials"])
     authenticator = stauth.Authenticate(
-        creds,
-        creds['cookie_name'],
-        creds['cookie_key'],
-        creds['cookie_expiry_days']
+        dict(st.secrets["credentials"]),
+        st.secrets["cookie"]["name"],
+        st.secrets["cookie"]["key"],
+        st.secrets["cookie"]["expiry_days"],
+        dict(st.secrets["preauthorized"])
     )
-    name, authentication_status, username = authenticator.login("main")
+    # Different versions of the library handle the login UI differently. 
+    # This safely tries the new way, and falls back to the old way.
+    try:
+        name, authentication_status, username = authenticator.login("main")
+    except TypeError:
+        name, authentication_status, username = authenticator.login("Login", "main")
+        
 except Exception as e:
-    st.error("⚠️ Authentication Setup Error. Please check your Streamlit Secrets format.")
+    st.error(f"⚠️ Authentication System Error: The library failed to load.")
+    st.error(f"Developer details: {e}")
     st.stop()
 
 # --- 4. LOGIN LOGIC ---
