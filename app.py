@@ -91,7 +91,7 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
-    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}, {{...}}]. The keys MUST exactly match the REQUIRED KEYS. If a value is missing, output 'N/A'."
+    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}]. NO markdown, NO conversational text. ONLY output the raw JSON."
     
     response = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct", 
@@ -99,8 +99,18 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     )
     
     raw_output = response.choices[0].message.content.strip()
-    match = re.search(r'\[.*\]', raw_output, re.DOTALL)
-    return match.group(0) if match else raw_output
+    
+    # --- THE SILENCER: Aggressively strip markdown and conversational text ---
+    if "```json" in raw_output:
+        raw_output = raw_output.split("```json")[1]
+    if "```" in raw_output:
+        raw_output = raw_output.split("```")[0]
+        
+    # Hunt for the first bracket/brace to isolate the data
+    match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
+    clean_json = match.group(1) if match else raw_output.strip()
+    
+    return clean_json
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
@@ -193,7 +203,6 @@ elif auth_status == True:
         if submitted and uploaded_files:
             with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
                 
-                # Create a blank slate for the single patient
                 master_patient_data = {col: 'N/A' for col in expected_cols}
                 
                 for file in uploaded_files:
@@ -208,7 +217,6 @@ elif auth_status == True:
                         else:
                             ai_data = {}
 
-                        # THE SMART MERGE LOGIC: Add data if we haven't found it yet
                         for col in expected_cols:
                             new_val = str(ai_data.get(col, ai_data.get(f"{col}:", 'N/A'))).strip()
                             if new_val not in ['N/A', 'nan', '', 'None']:
@@ -218,10 +226,8 @@ elif auth_status == True:
                     except Exception as e:
                         st.error(f"Could not read {file.name}. Error: {e}")
                 
-                # Turn the single merged profile into a row
                 current_batch_df = pd.DataFrame([master_patient_data])
                 
-                # Generate exactly ONE System_ID
                 if st.session_state.master_database.empty or 'System_ID' not in st.session_state.master_database.columns:
                     start_num = 1000
                 else:
