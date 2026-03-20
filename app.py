@@ -258,4 +258,4 @@ elif authentication_status == True:
     with col_y:
         if not st.session_state.master_database.empty:
             csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)d
+            st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
