@@ -85,17 +85,16 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     match = re.search(r'\[.*\]', raw_output, re.DOTALL)
     return match.group(0) if match else raw_output
 
-# --- 3. AUTHENTICATION GATEKEEPER (New strict format) ---
+# --- 3. AUTHENTICATION GATEKEEPER (Fixed Version) ---
 try:
+    # We removed the broken "preauthorized" line here!
     authenticator = stauth.Authenticate(
         dict(st.secrets["credentials"]),
         st.secrets["cookie"]["name"],
         st.secrets["cookie"]["key"],
-        st.secrets["cookie"]["expiry_days"],
-        dict(st.secrets["preauthorized"])
+        st.secrets["cookie"]["expiry_days"]
     )
-    # Different versions of the library handle the login UI differently. 
-    # This safely tries the new way, and falls back to the old way.
+    
     try:
         name, authentication_status, username = authenticator.login("main")
     except TypeError:
@@ -259,4 +258,4 @@ elif authentication_status == True:
     with col_y:
         if not st.session_state.master_database.empty:
             csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
+            st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)d
