@@ -76,8 +76,9 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
     prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}, {{...}}]. The keys MUST exactly match the REQUIRED KEYS. If a value is missing, output 'N/A'."
     
+    # POINTING TO THE NEWEST VISION MODEL HERE:
     response = client.chat.completions.create(
-        model="llama3-8b-8192", 
+        model="llama-3.2-11b-vision-preview", 
         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
     )
     
@@ -87,7 +88,6 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
-    # THE MAGIC FIX: A tiny function to turn Read-Only Secrets into an Editable Dictionary
     def unlock_vault(read_only_dict):
         editable_dict = {}
         for key, value in read_only_dict.items():
@@ -97,7 +97,6 @@ try:
                 editable_dict[key] = value
         return editable_dict
 
-    # We make our photocopy of the credentials here!
     mutable_credentials = unlock_vault(st.secrets["credentials"])
 
     authenticator = stauth.Authenticate(
