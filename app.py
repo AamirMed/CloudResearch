@@ -85,9 +85,8 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     match = re.search(r'\[.*\]', raw_output, re.DOTALL)
     return match.group(0) if match else raw_output
 
-# --- 3. AUTHENTICATION GATEKEEPER (Fixed Version) ---
+# --- 3. AUTHENTICATION GATEKEEPER (Bulletproof Version) ---
 try:
-    # We removed the broken "preauthorized" line here!
     authenticator = stauth.Authenticate(
         dict(st.secrets["credentials"]),
         st.secrets["cookie"]["name"],
@@ -95,10 +94,8 @@ try:
         st.secrets["cookie"]["expiry_days"]
     )
     
-    try:
-        name, authentication_status, username = authenticator.login("main")
-    except TypeError:
-        name, authentication_status, username = authenticator.login("Login", "main")
+    # We strictly declare the keyword "location" so the library cannot get confused
+    name, authentication_status, username = authenticator.login(location="main")
         
 except Exception as e:
     st.error(f"⚠️ Authentication System Error: The library failed to load.")
