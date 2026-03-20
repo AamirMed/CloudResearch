@@ -85,7 +85,7 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     match = re.search(r'\[.*\]', raw_output, re.DOTALL)
     return match.group(0) if match else raw_output
 
-# --- 3. AUTHENTICATION GATEKEEPER (Bulletproof Version) ---
+# --- 3. AUTHENTICATION GATEKEEPER (V0.4+ Modernized) ---
 try:
     authenticator = stauth.Authenticate(
         dict(st.secrets["credentials"]),
@@ -94,23 +94,29 @@ try:
         st.secrets["cookie"]["expiry_days"]
     )
     
-    # We strictly declare the keyword "location" so the library cannot get confused
-    name, authentication_status, username = authenticator.login(location="main")
+    # We just tell it to render the login box. It saves the result in the background.
+    authenticator.login()
         
 except Exception as e:
     st.error(f"⚠️ Authentication System Error: The library failed to load.")
     st.error(f"Developer details: {e}")
     st.stop()
 
-# --- 4. LOGIN LOGIC ---
-if authentication_status == False:
+# --- 4. LOGIN LOGIC (Reading the background memory) ---
+auth_status = st.session_state.get("authentication_status")
+
+if auth_status == False:
     st.error("❌ Username or password is incorrect.")
-elif authentication_status == None:
+elif auth_status == None:
     st.title("☁️ CloudResearch")
     st.warning("🔒 Please enter your username and password to access the Command Center.")
 
-elif authentication_status == True:
+elif auth_status == True:
     # 🎉 THEY ARE LOGGED IN! THE APP UNLOCKS.
+    
+    # We pull their name and username from the background memory
+    username = st.session_state.get("username")
+    name = st.session_state.get("name")
     
     if "master_database" not in st.session_state:
         st.session_state.master_database = pd.DataFrame()
