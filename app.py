@@ -21,7 +21,8 @@ def get_google_sheet_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
+# NEW EXPLICIT PUSH/PULL ENGINE
+def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     google_client = get_google_sheet_client()
     
     try:
@@ -30,51 +31,45 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name):
         spreadsheet = google_client.open_by_url(sheet_url)
         sheet = spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="20")
     
-    cloud_data = sheet.get_all_values()
-    if len(cloud_data) > 1:
-        cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
-    elif len(cloud_data) == 1:
-        cloud_df = pd.DataFrame(columns=cloud_data[0])
-    else:
-        cloud_df = pd.DataFrame()
-
-    if not cloud_df.empty:
-        cloud_df.rename(columns=lambda x: 'System_ID' if str(x).strip().lower() in ['system_id', 'system id'] else x, inplace=True)
-        
-        if 'System_ID' not in cloud_df.columns:
-            cloud_df.insert(0, 'System_ID', [f"CR-{1000 + i}" for i in range(len(cloud_df))])
+    # ⬇️ PULL MODE: Just grab the data from Google and format the IDs
+    if mode == "pull":
+        cloud_data = sheet.get_all_values()
+        if len(cloud_data) > 1:
+            cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
+        elif len(cloud_data) == 1:
+            cloud_df = pd.DataFrame(columns=cloud_data[0])
         else:
-            missing_mask = cloud_df['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
-            if missing_mask.any():
-                valid_ids = cloud_df.loc[~missing_mask, 'System_ID'].astype(str).str.extract(r'(\d+)').dropna().astype(int)
-                start_val = int(valid_ids.max()[0]) + 1 if not valid_ids.empty else 1000
-                
-                new_ids = []
-                for _ in range(missing_mask.sum()):
-                    new_ids.append(f"CR-{start_val}")
-                    start_val += 1
-                cloud_df.loc[missing_mask, 'System_ID'] = new_ids
+            cloud_df = pd.DataFrame()
 
-    if not local_dataframe.empty:
-        combined_df = pd.concat([cloud_df, local_dataframe], ignore_index=True)
-        combined_df['System_ID'] = combined_df['System_ID'].astype(str).str.strip()
-        combined_df = combined_df[combined_df['System_ID'] != '']
-        combined_df = combined_df[combined_df['System_ID'] != 'nan']
-        combined_df.replace({'N/A': np.nan, 'NA': np.nan, '': np.nan, 'None': np.nan}, inplace=True)
-        combined_df = combined_df.groupby('System_ID', as_index=False).last() 
-        combined_df.fillna('N/A', inplace=True)
-    else:
-        combined_df = cloud_df
-        
-    sheet.clear()
-    if not combined_df.empty:
-        combined_df = combined_df.astype(str)
-        cols = ['System_ID'] + [c for c in combined_df.columns if c != 'System_ID']
-        combined_df = combined_df[cols]
-        data_to_upload = [combined_df.columns.values.tolist()] + combined_df.values.tolist()
-        sheet.update(range_name="A1", values=data_to_upload)
-    
-    return combined_df
+        if not cloud_df.empty:
+            cloud_df.rename(columns=lambda x: 'System_ID' if str(x).strip().lower() in ['system_id', 'system id'] else x, inplace=True)
+            
+            if 'System_ID' not in cloud_df.columns:
+                cloud_df.insert(0, 'System_ID', [f"CR-{1000 + i}" for i in range(len(cloud_df))])
+            else:
+                missing_mask = cloud_df['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
+                if missing_mask.any():
+                    valid_ids = cloud_df.loc[~missing_mask, 'System_ID'].astype(str).str.extract(r'(\d+)').dropna().astype(int)
+                    start_val = int(valid_ids.max()[0]) + 1 if not valid_ids.empty else 1000
+                    
+                    new_ids = []
+                    for _ in range(missing_mask.sum()):
+                        new_ids.append(f"CR-{start_val}")
+                        start_val += 1
+                    cloud_df.loc[missing_mask, 'System_ID'] = new_ids
+        return cloud_df
+
+    # ⬆️ PUSH MODE: Completely overwrite Google Sheets with the Local App Data
+    elif mode == "push":
+        sheet.clear()
+        if not local_dataframe.empty:
+            df_to_upload = local_dataframe.copy()
+            df_to_upload = df_to_upload.astype(str)
+            cols = ['System_ID'] + [c for c in df_to_upload.columns if c != 'System_ID']
+            df_to_upload = df_to_upload[cols]
+            data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
+            sheet.update(range_name="A1", values=data_to_upload)
+        return local_dataframe
 
 def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
@@ -91,8 +86,6 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
-    
-    # We explicitly tell the AI to create an array of MULTIPLE patients if it sees them.
     prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. NO markdown, NO conversational text. ONLY output the raw JSON array."
     
     response = client.chat.completions.create(
@@ -160,7 +153,8 @@ elif auth_status == True:
         st.session_state.master_database = pd.DataFrame()
         if saved_sheet_url and username:
             try:
-                st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username)
+                # Silently pull fresh data on login
+                st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username, mode="pull")
             except Exception:
                 pass 
 
@@ -190,8 +184,6 @@ elif auth_status == True:
 
     # --- 5. DATA ENTRY MODE ---
     st.subheader("📸 Step 1: Data Entry Mode")
-    
-    # NEW: Three options for workflow!
     entry_mode = st.radio(
         "Select your workflow:", 
         ["🆕 Single Patient (Merge Pages)", "📋 Multiple Patients (Roster)", "🔄 Update Existing"], 
@@ -200,7 +192,6 @@ elif auth_status == True:
     st.divider()
     expected_cols = [c.strip() for c in column_headers.split(',')]
 
-    # WORKFLOW 1: Merge multiple pages into ONE patient
     if "Single Patient" in entry_mode:
         st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
         with st.form("add_single_form", clear_on_submit=True):
@@ -247,7 +238,6 @@ elif auth_status == True:
                     st.session_state.master_database = current_batch_df
                 st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
 
-    # WORKFLOW 2: Extract MANY patients from a single Roster
     elif "Multiple Patients" in entry_mode:
         st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
         with st.form("add_multiple_form", clear_on_submit=True):
@@ -259,20 +249,15 @@ elif auth_status == True:
             for file in uploaded_files:
                 with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
                     try:
-                        # Give the AI a strict reminder to pull everyone
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
                         raw_json = blueprint_decoder(file.getvalue(), column_headers, roster_rules, st.secrets["GROQ_API_KEY"])
                         ai_data_list = json.loads(raw_json) 
                         
-                        # Ensure we always have a list to loop through
                         if isinstance(ai_data_list, dict):
                             ai_data_list = [ai_data_list]
                             
-                        # Loop through EVERY patient the AI found on the paper
                         for patient_data in ai_data_list:
                             filtered_data = {col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip() for col in expected_cols}
-                            
-                            # Only add them if the AI actually found real data (ignores blank rows)
                             if any(val not in ['N/A', 'nan', '', 'None'] for val in filtered_data.values()):
                                 patient_dfs.append(pd.DataFrame([filtered_data]))
                                 
@@ -289,7 +274,6 @@ elif auth_status == True:
                     nums = existing_ids.str.extract(r'(\d+)').dropna().astype(int)
                     start_num = int(nums.max()[0]) + 1 if not nums.empty else 1000
                 
-                # Generate a unique ID for every single row the AI found
                 new_ids = [f"CR-{start_num + i}" for i in range(len(current_batch_df))]
                 current_batch_df.insert(0, "System_ID", new_ids)
                 
@@ -299,7 +283,6 @@ elif auth_status == True:
                     st.session_state.master_database = current_batch_df
                 st.success(f"✅ Extracted {len(current_batch_df)} patients from the roster! IDs assigned: {new_ids[0]} to {new_ids[-1]}")
 
-    # WORKFLOW 3: Update existing
     elif "Update" in entry_mode:
         st.info("Check your Google Sheet for the patient's 'System_ID'. Type it below to add new data.")
         with st.form("update_form", clear_on_submit=True):
@@ -314,7 +297,7 @@ elif auth_status == True:
             if not target_id:
                 st.error("You must provide the System_ID.")
             elif st.session_state.master_database.empty or target_id not in st.session_state.master_database['System_ID'].values:
-                st.error(f"❌ Could not find '{target_id}' in local memory. Did you Sync from the cloud first?")
+                st.error(f"❌ Could not find '{target_id}' in local memory. Did you Pull from the cloud first?")
             elif not update_files:
                 st.error("Please upload the documents.")
             else:
@@ -350,26 +333,38 @@ elif auth_status == True:
             key="data_verifier"
         )
 
-    # --- 7. CLOUD SYNC ---
+    # --- 7. CLOUD SYNC (NEW EXPLICIT BUTTONS) ---
     st.divider()
     st.subheader("🌐 Step 3: Finalize & Sync")
-    col_x, col_y = st.columns([1, 1])
+    col_x, col_y, col_z = st.columns([1, 1, 1])
 
     with col_x:
-        if st.button("🚀 PUSH / PULL GOOGLE CLOUD", type="primary", use_container_width=True):
-            with st.spinner("Syncing secure data..."):
+        if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
+            with st.spinner("Overwriting Cloud with your Local Data..."):
                 if not user_sheet_url or not project_tab:
-                    st.error("❌ Please ensure your Database Connection in the sidebar is filled out.")
+                    st.error("❌ Please ensure your Database Connection is filled out.")
                 else:
                     try:
-                        merged_data = sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab)
-                        st.session_state.master_database = merged_data
-                        st.toast("✅ Sync Complete! Data secured.", icon="☁️")
+                        sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
+                        st.toast("✅ Cloud Updated Successfully!", icon="☁️")
                         st.rerun()
                     except Exception as e:
-                        st.error(f"❌ Sync Failed. Error: {e}")
+                        st.error(f"❌ Push Failed. Error: {e}")
 
     with col_y:
+        if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
+            with st.spinner("Downloading Fresh Cloud Data..."):
+                if not user_sheet_url or not project_tab:
+                    st.error("❌ Please ensure your Database Connection is filled out.")
+                else:
+                    try:
+                        st.session_state.master_database = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                        st.toast("✅ Local Data Refreshed!", icon="⬇️")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"❌ Pull Failed. Error: {e}")
+
+    with col_z:
         if not st.session_state.master_database.empty:
             csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 Download Offline CSV Backup", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
+            st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
