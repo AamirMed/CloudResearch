@@ -94,7 +94,7 @@ try:
         st.secrets["cookie"]["expiry_days"]
     )
     
-    # We just tell it to render the login box. It saves the result in the background.
+    # Render the login box. It saves the result in the background session state.
     authenticator.login()
         
 except Exception as e:
@@ -254,7 +254,8 @@ elif auth_status == True:
                     try:
                         merged_data = sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab)
                         st.session_state.master_database = merged_data
-                        st.success(f"✅ Sync Complete! Data secured in your private '{project_tab}' tab.")
+                        st.toast("✅ Sync Complete! Data secured.", icon="☁️")
+                        st.rerun() # Forces the screen to refresh and show the data!
                     except Exception as e:
                         st.error(f"❌ Sync Failed. Error: {e}")
 
