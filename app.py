@@ -85,16 +85,28 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     match = re.search(r'\[.*\]', raw_output, re.DOTALL)
     return match.group(0) if match else raw_output
 
-# --- 3. AUTHENTICATION GATEKEEPER (V0.4+ Modernized) ---
+# --- 3. AUTHENTICATION GATEKEEPER ---
 try:
+    # THE MAGIC FIX: A tiny function to turn Read-Only Secrets into an Editable Dictionary
+    def unlock_vault(read_only_dict):
+        editable_dict = {}
+        for key, value in read_only_dict.items():
+            if isinstance(value, dict) or hasattr(value, "items"):
+                editable_dict[key] = unlock_vault(value)
+            else:
+                editable_dict[key] = value
+        return editable_dict
+
+    # We make our photocopy of the credentials here!
+    mutable_credentials = unlock_vault(st.secrets["credentials"])
+
     authenticator = stauth.Authenticate(
-        dict(st.secrets["credentials"]),
+        mutable_credentials,
         st.secrets["cookie"]["name"],
         st.secrets["cookie"]["key"],
         st.secrets["cookie"]["expiry_days"]
     )
     
-    # Render the login box. It saves the result in the background session state.
     authenticator.login()
         
 except Exception as e:
@@ -102,7 +114,7 @@ except Exception as e:
     st.error(f"Developer details: {e}")
     st.stop()
 
-# --- 4. LOGIN LOGIC (Reading the background memory) ---
+# --- 4. LOGIN LOGIC ---
 auth_status = st.session_state.get("authentication_status")
 
 if auth_status == False:
@@ -114,7 +126,6 @@ elif auth_status == None:
 elif auth_status == True:
     # 🎉 THEY ARE LOGGED IN! THE APP UNLOCKS.
     
-    # We pull their name and username from the background memory
     username = st.session_state.get("username")
     name = st.session_state.get("name")
     
