@@ -76,9 +76,9 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
     prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output EXACTLY ONE valid JSON ARRAY format: [{{...}}, {{...}}]. The keys MUST exactly match the REQUIRED KEYS. If a value is missing, output 'N/A'."
     
-    # POINTING TO THE NEWEST VISION MODEL HERE:
+    # --- POINTING TO THE NEWEST LLAMA 4 VISION MODEL ---
     response = client.chat.completions.create(
-        model="llama-3.2-11b-vision-preview", 
+        model="meta-llama/llama-4-scout-17b-16e-instruct", 
         messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
     )
     
