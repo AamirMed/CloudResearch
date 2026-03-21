@@ -205,11 +205,11 @@ elif auth_status == True:
     st.title("☁️ CloudResearch Command Center")
 
     # --- TABBED INTERFACE ---
-    tabs = st.tabs(["📸 Data Entry & Verification", "📊 Data Explorer", "🌐 Cloud Database Sync"])
+    tabs = st.tabs(["📸 Data Entry, Verification & Sync", "📊 Data Explorer"])
     expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
     # ==========================================
-    # TAB 1: DATA ENTRY
+    # TAB 1: DATA ENTRY, VERIFICATION & SYNC
     # ==========================================
     with tabs[0]:
         st.subheader("Add or Update Patients")
@@ -231,7 +231,6 @@ elif auth_status == True:
                     master_patient_data = {col: 'N/A' for col in expected_cols}
                     for file in uploaded_files:
                         raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
-                        # --- AI SAFETY NET ---
                         try:
                             ai_data_list = json.loads(raw_json) 
                         except json.JSONDecodeError:
@@ -280,7 +279,6 @@ elif auth_status == True:
                     with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
                         raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, st.secrets["GROQ_API_KEY"])
-                        # --- AI SAFETY NET ---
                         try:
                             ai_data_list = json.loads(raw_json)
                         except json.JSONDecodeError:
@@ -339,7 +337,6 @@ elif auth_status == True:
                     for file in update_files:
                         with st.spinner(f"Reading new data for {target_id}..."):
                             raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
-                            # --- AI SAFETY NET ---
                             try:
                                 ai_data = json.loads(raw_json)
                             except json.JSONDecodeError:
@@ -362,7 +359,7 @@ elif auth_status == True:
                                     st.session_state.master_database.at[idx, col] = new_val
                             st.success(f"✅ Profile {target_id} successfully updated!")
 
-        # --- DATA EDITOR IN TAB 1 ---
+        # --- DATA EDITOR ---
         if not st.session_state.master_database.empty:
             st.divider()
             st.subheader("📝 Verify & Edit Data")
@@ -373,6 +370,68 @@ elif auth_status == True:
                 use_container_width=True,
                 key="data_verifier"
             )
+
+        # --- CLOUD SYNC CONTROLS (Moved to Tab 1) ---
+        st.divider()
+        st.subheader("🌐 Cloud Database Management")
+        st.info("Align your app's memory with your secure Google Sheet.")
+        col_x, col_y, col_z = st.columns([1, 1, 1])
+
+        with col_x:
+            if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
+                # --- NEW: DATA VALIDATION LAYER ---
+                if st.session_state.master_database.empty:
+                    st.warning("⚠️ The local database is empty. There is nothing to save.")
+                else:
+                    # Check for any missing or invalid System_IDs
+                    missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
+                    
+                    if missing_ids.any():
+                        num_missing = missing_ids.sum()
+                        st.error(f"❌ Validation Failed: {num_missing} row(s) are missing a 'System_ID'. Please fix this in the table above before saving.")
+                    elif not user_sheet_url or not project_tab:
+                        st.error("❌ Please ensure your Database Connection is filled out in the sidebar.")
+                    else:
+                        # --- ORIGINAL PUSH LOGIC ---
+                        with st.spinner("Aligning Columns and Overwriting Cloud..."):
+                            try:
+                                final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
+                                
+                                for col in final_cols:
+                                    if col not in st.session_state.master_database.columns:
+                                        st.session_state.master_database[col] = 'N/A'
+                                st.session_state.master_database = st.session_state.master_database[final_cols]
+
+                                sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
+                                st.toast("✅ Cloud Updated Successfully!", icon="☁️")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"❌ Push Failed. Error: {e}")
+        with col_y:
+            if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
+                with st.spinner("Reading Google Sheet Columns..."):
+                    if not user_sheet_url or not project_tab:
+                        st.error("❌ Please ensure your Database Connection is filled out.")
+                    else:
+                        try:
+                            pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                            st.session_state.master_database = pulled_df
+                            
+                            if not pulled_df.empty:
+                                pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
+                                if pulled_cols:
+                                    st.session_state.schema_input = ", ".join(pulled_cols)
+                                    
+                            st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Pull Failed. Error: {e}")
+
+        with col_z:
+            if not st.session_state.master_database.empty:
+                csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
+
 
     # ==========================================
     # TAB 2: DYNAMIC DATA EXPLORER
@@ -408,59 +467,3 @@ elif auth_status == True:
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.warning("⚠️ Could not generate this chart type with the selected columns. Try selecting different axes or ensure your Y-axis contains numerical data.")
-
-    # ==========================================
-    # TAB 3: CLOUD SYNC
-    # ==========================================
-    with tabs[2]:
-        st.subheader("🌐 Cloud Database Management")
-        st.info("Align your app's memory with your secure Google Sheet.")
-        col_x, col_y, col_z = st.columns([1, 1, 1])
-
-        with col_x:
-            if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
-                with st.spinner("Aligning Columns and Overwriting Cloud..."):
-                    if not user_sheet_url or not project_tab:
-                        st.error("❌ Please ensure your Database Connection is filled out.")
-                    else:
-                        try:
-                            final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
-                            
-                            if st.session_state.master_database.empty:
-                                st.session_state.master_database = pd.DataFrame(columns=final_cols)
-                            else:
-                                for col in final_cols:
-                                    if col not in st.session_state.master_database.columns:
-                                        st.session_state.master_database[col] = 'N/A'
-                                st.session_state.master_database = st.session_state.master_database[final_cols]
-
-                            sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
-                            st.toast("✅ Cloud Updated with New Columns!", icon="☁️")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Push Failed. Error: {e}")
-
-        with col_y:
-            if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
-                with st.spinner("Reading Google Sheet Columns..."):
-                    if not user_sheet_url or not project_tab:
-                        st.error("❌ Please ensure your Database Connection is filled out.")
-                    else:
-                        try:
-                            pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
-                            st.session_state.master_database = pulled_df
-                            
-                            if not pulled_df.empty:
-                                pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
-                                if pulled_cols:
-                                    st.session_state.schema_input = ", ".join(pulled_cols)
-                                    
-                            st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
-                            st.rerun()
-                        except Exception as e:
-                            st.error(f"❌ Pull Failed. Error: {e}")
-
-        with col_z:
-            if not st.session_state.master_database.empty:
-                csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
