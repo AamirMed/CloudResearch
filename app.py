@@ -205,7 +205,7 @@ elif auth_status == True:
     st.title("☁️ CloudResearch Command Center")
 
     # --- TABBED INTERFACE ---
-    tabs = st.tabs(["📸 Data Entry & Verification", "📊 Clinical Analytics", "🌐 Cloud Database Sync"])
+    tabs = st.tabs(["📸 Data Entry & Verification", "📊 Data Explorer", "🌐 Cloud Database Sync"])
     expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
     # ==========================================
@@ -375,57 +375,39 @@ elif auth_status == True:
             )
 
     # ==========================================
-    # TAB 2: ANALYTICS & STATS
+    # TAB 2: DYNAMIC DATA EXPLORER
     # ==========================================
     with tabs[1]:
-        st.subheader("📈 Real-time Clinical Statistics")
+        st.subheader("📊 Dynamic Data Explorer")
+        
         if st.session_state.master_database.empty:
             st.info("Upload data or sync from the cloud to view statistics.")
         else:
             df = st.session_state.master_database
+            
+            # 1. Automatic Column Selection
+            all_columns = df.columns.tolist()
+            
             col1, col2 = st.columns(2)
-
             with col1:
-                # Look for an 'Organism' column (case-insensitive)
-                org_col = next((c for c in df.columns if 'organism' in c.lower()), None)
-                if org_col:
-                    st.write("**Organism Distribution**")
-                    # Filter out N/A values for cleaner chart
-                    clean_df = df[~df[org_col].isin(['N/A', 'nan', '', 'None'])]
-                    if not clean_df.empty:
-                        fig_pie = px.pie(clean_df, names=org_col, hole=0.3, color_discrete_sequence=px.colors.qualitative.Pastel)
-                        st.plotly_chart(fig_pie, use_container_width=True)
-                    else:
-                        st.write("No valid organism data to plot yet.")
-                else:
-                    st.warning("No 'Organism' column found in your schema.")
-
+                x_axis = st.selectbox("Select X-axis (Categorical)", all_columns)
             with col2:
-                # Detect antibiotic columns by looking for keywords or S/R values
-                sens_cols = [c for c in df.columns if any(keyword in c.lower() for keyword in ['sensitivity', 'cipro', 'amox', 'penicillin', 'gentamicin'])]
-                # Fallback: find any columns that mostly contain 'S' or 'R'
-                if not sens_cols:
-                    for c in df.columns:
-                        unique_vals = set(df[c].astype(str).str.upper().unique())
-                        if 'S' in unique_vals or 'R' in unique_vals:
-                            sens_cols.append(c)
+                y_axis = st.selectbox("Select Y-axis (Numerical)", all_columns)
 
-                if sens_cols:
-                    st.write("**Antibiotic Resistance Profile**")
-                    # Melt dataframe for plotting
-                    melted = df[sens_cols].melt(var_name='Antibiotic', value_name='Status')
-                    # Standardize Status text
-                    melted['Status'] = melted['Status'].astype(str).str.upper().str.strip()
-                    clean_melted = melted[melted['Status'].isin(['S', 'R'])] # Only plot S and R
-                    
-                    if not clean_melted.empty:
-                        fig_bar = px.histogram(clean_melted, x='Antibiotic', color='Status', barmark='group', 
-                                             color_discrete_map={'S': '#2ecc71', 'R': '#e74c3c'})
-                        st.plotly_chart(fig_bar, use_container_width=True)
-                    else:
-                        st.write("No 'S' or 'R' data to plot yet.")
+            # 2. Dynamic Chart Generation
+            chart_type = st.radio("Chart Type", ["Bar", "Pie", "Scatter"], horizontal=True)
+
+            try:
+                if chart_type == "Bar":
+                    fig = px.bar(df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
+                elif chart_type == "Pie":
+                    fig = px.pie(df, names=x_axis, title=f"Distribution of {x_axis}")
                 else:
-                    st.warning("No antibiotic sensitivity columns detected.")
+                    fig = px.scatter(df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
+
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning("⚠️ Could not generate this chart type with the selected columns. Try selecting different axes or ensure your Y-axis contains numerical data.")
 
     # ==========================================
     # TAB 3: CLOUD SYNC
