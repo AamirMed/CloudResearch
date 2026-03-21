@@ -102,8 +102,14 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     compressed_bytes = compress_image(image_bytes)
     base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     
-    system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
-    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. NO markdown, NO conversational text. ONLY output the raw JSON array. If you cannot read the image, output an empty array []."
+    # --- THE SMART CONTEXT UPGRADE ---
+    system_instructions = (
+        "You are an expert clinical data extractor and medical interpreter. "
+        "CRITICAL DIRECTIVE: You must use clinical semantic matching. Do not rely solely on exact literal text matches. "
+        "Intelligently translate and map standard medical abbreviations to the requested columns (e.g., if the requested column is 'Diabetes', and the text says 'DM', 'T2DM', or 'IDDM', map that as the value). "
+        "Use surrounding clinical context to deduce the correct values."
+    )
+    prompt = f"{system_instructions}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nSPECIFIC USER RULES & CONTEXT: {rules}\n\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If a value is missing or cannot be logically inferred, output 'N/A'. NO markdown, NO conversational text. ONLY output the raw JSON array. If you cannot read the image, output an empty array []."
     
     response = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct", 
@@ -197,11 +203,9 @@ elif auth_status == True:
         st.header("📋 2. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
         
-        # --- NEW SAFE STATE LOGIC ---
         if "safe_schema_val" not in st.session_state:
             st.session_state.safe_schema_val = st.session_state.schema_input
 
-        # Dedicated Schema Sync Buttons
         col_pull, col_push = st.columns(2)
         with col_pull:
             if st.button("⬇️ Pull Cols", use_container_width=True, help="Fetch existing headers from your sheet"):
@@ -237,14 +241,12 @@ elif auth_status == True:
                 else:
                     st.toast("Enter Sheet URL above first.", icon="⚠️")
         
-        # Text input uses the safe variable
         updated_schema = st.text_input("Exact Clinical Columns:", value=st.session_state.safe_schema_val)
         
-        # Sync states
         st.session_state.safe_schema_val = updated_schema
         st.session_state.schema_input = updated_schema
         
-        extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
+        extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons. Map complex abbreviations using clinical logic.")
         
         st.divider()
         st.header("💾 3. Local Controls")
@@ -479,7 +481,7 @@ elif auth_status == True:
                 csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
 
-    # ==========================================
+    # # ==========================================
     # TAB 2: DYNAMIC DATA EXPLORER
     # ==========================================
     with tabs[1]:
@@ -488,7 +490,22 @@ elif auth_status == True:
         if st.session_state.master_database.empty:
             st.info("Upload data or sync from the cloud to view statistics.")
         else:
-            df = st.session_state.master_database
+            # 1. Create a temporary copy so we don't alter the actual database
+            df = st.session_state.master_database.copy()
+            
+            # --- 2. THE AUTO-SANITIZER ---
+            for col in df.columns:
+                # Attempt to convert strings to actual numbers (fixes scattered Y-axis issues)
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+                
+                # If the column is still text, clean up the casing and spaces
+                if df[col].dtype == 'object':
+                    # Strip spaces and force Title Case (e.g., "yeS " becomes "Yes")
+                    df[col] = df[col].astype(str).str.strip().str.title()
+                    
+                    # Merge all the messy null values into one clean 'N/A' category
+                    df[col] = df[col].replace({'N/A': 'N/A', 'N/a': 'N/A', 'Nan': 'N/A', 'None': 'N/A', '': 'N/A'})
+            # -----------------------------
             
             all_columns = df.columns.tolist()
             
@@ -501,12 +518,16 @@ elif auth_status == True:
             chart_type = st.radio("Chart Type", ["Bar", "Pie", "Scatter"], horizontal=True)
 
             try:
+                # Remove N/A values from the specific axes we are graphing for a much cleaner chart
+                clean_chart_df = df[~df[x_axis].isin(['N/A'])]
+                clean_chart_df = clean_chart_df[~clean_chart_df[y_axis].isin(['N/A'])]
+
                 if chart_type == "Bar":
-                    fig = px.bar(df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
+                    fig = px.bar(clean_chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
                 elif chart_type == "Pie":
-                    fig = px.pie(df, names=x_axis, title=f"Distribution of {x_axis}")
+                    fig = px.pie(clean_chart_df, names=x_axis, title=f"Distribution of {x_axis}")
                 else:
-                    fig = px.scatter(df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
+                    fig = px.scatter(clean_chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
 
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
