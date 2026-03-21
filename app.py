@@ -197,43 +197,53 @@ elif auth_status == True:
         st.header("📋 2. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
         
-        # FIX: Decoupled widget to allow programmatic updates
-        updated_schema = st.text_input("Exact Clinical Columns:", value=st.session_state.schema_input)
-        st.session_state.schema_input = updated_schema
-        
+        # --- NEW SAFE STATE LOGIC ---
+        if "safe_schema_val" not in st.session_state:
+            st.session_state.safe_schema_val = st.session_state.schema_input
+
         # Dedicated Schema Sync Buttons
         col_pull, col_push = st.columns(2)
         with col_pull:
             if st.button("⬇️ Pull Cols", use_container_width=True, help="Fetch existing headers from your sheet"):
                 if user_sheet_url and project_tab:
-                    try:
-                        sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
-                        cloud_headers = sheet.row_values(1)
-                        if cloud_headers:
-                            clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
-                            st.session_state.schema_input = ", ".join(clean_headers)
-                            st.rerun()
-                        else:
-                            st.toast("Sheet is completely empty.", icon="⚠️")
-                    except Exception as e:
-                        st.toast(f"Error pulling columns: {e}", icon="❌")
+                    with st.spinner("Pulling..."):
+                        try:
+                            sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                            cloud_headers = sheet.row_values(1)
+                            if cloud_headers:
+                                clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
+                                st.session_state.safe_schema_val = ", ".join(clean_headers)
+                                st.toast("✅ Columns Pulled Successfully!", icon="⬇️")
+                                st.rerun()
+                            else:
+                                st.toast("Sheet is completely empty.", icon="⚠️")
+                        except Exception as e:
+                            st.toast(f"Error pulling columns: {e}", icon="❌")
                 else:
                     st.toast("Enter Sheet URL above first.", icon="⚠️")
 
         with col_push:
             if st.button("⬆️ Push Cols", use_container_width=True, help="Overwrite row 1 of your sheet with these columns"):
                 if user_sheet_url and project_tab:
-                    try:
-                        sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
-                        current_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
-                        final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
-                        sheet.update(range_name="A1", values=[final_headers]) 
-                        st.toast("✅ Cloud headers updated!", icon="☁️")
-                    except Exception as e:
-                        st.toast(f"Error pushing columns: {e}", icon="❌")
+                    with st.spinner("Pushing..."):
+                        try:
+                            sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                            current_cols = [c.strip() for c in st.session_state.safe_schema_val.split(',') if c.strip()]
+                            final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
+                            sheet.update(range_name="A1", values=[final_headers]) 
+                            st.toast("✅ Cloud headers updated!", icon="☁️")
+                        except Exception as e:
+                            st.toast(f"Error pushing columns: {e}", icon="❌")
                 else:
                     st.toast("Enter Sheet URL above first.", icon="⚠️")
-                    
+        
+        # Text input uses the safe variable
+        updated_schema = st.text_input("Exact Clinical Columns:", value=st.session_state.safe_schema_val)
+        
+        # Sync states
+        st.session_state.safe_schema_val = updated_schema
+        st.session_state.schema_input = updated_schema
+        
         extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
         
         st.divider()
