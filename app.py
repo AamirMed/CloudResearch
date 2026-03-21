@@ -8,6 +8,7 @@ import re
 import random
 import string
 from groq import Groq
+import google.generativeai as genai
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
@@ -24,7 +25,6 @@ def get_google_sheet_client():
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
 
-# SECURE 4-DIGIT ID GENERATOR
 def generate_unique_id(existing_ids):
     alphabet = string.ascii_uppercase + string.digits 
     while True:
@@ -35,7 +35,6 @@ def generate_unique_id(existing_ids):
 
 def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     google_client = get_google_sheet_client()
-    
     try:
         sheet = google_client.open_by_url(sheet_url).worksheet(tab_name)
     except gspread.exceptions.WorksheetNotFound:
@@ -53,7 +52,6 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
 
         if not cloud_df.empty:
             cloud_df.rename(columns=lambda x: 'System_ID' if str(x).strip().lower() in ['system_id', 'system id'] else x, inplace=True)
-            
             if 'System_ID' not in cloud_df.columns:
                 existing = set()
                 new_ids = []
@@ -77,8 +75,7 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     elif mode == "push":
         sheet.clear()
         if not local_dataframe.empty:
-            df_to_upload = local_dataframe.copy()
-            df_to_upload = df_to_upload.astype(str)
+            df_to_upload = local_dataframe.copy().astype(str)
             cols = ['System_ID'] + [c for c in df_to_upload.columns if c != 'System_ID']
             df_to_upload = df_to_upload[cols]
             data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
@@ -97,34 +94,46 @@ def compress_image(image_bytes):
     img.save(output, format="JPEG", quality=85)
     return output.getvalue()
 
-def blueprint_decoder(image_bytes, columns, rules, api_key):
-    client = Groq(api_key=api_key)
-    compressed_bytes = compress_image(image_bytes)
-    base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
-    
-    # --- THE SMART CONTEXT UPGRADE ---
+# --- THE SMART, MULTI-BRAIN DECODER ---
+def blueprint_decoder(image_bytes, columns, rules, model_choice):
     system_instructions = (
         "You are an expert clinical data extractor and medical interpreter. "
         "CRITICAL DIRECTIVE: You must use clinical semantic matching. Do not rely solely on exact literal text matches. "
-        "Intelligently translate and map standard medical abbreviations to the requested columns (e.g., if the requested column is 'Diabetes', and the text says 'DM', 'T2DM', or 'IDDM', map that as the value). "
+        "Intelligently translate and map standard medical abbreviations to the requested columns (e.g., DM -> Diabetes). "
         "Use surrounding clinical context to deduce the correct values."
     )
-    prompt = f"{system_instructions}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nSPECIFIC USER RULES & CONTEXT: {rules}\n\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If a value is missing or cannot be logically inferred, output 'N/A'. NO markdown, NO conversational text. ONLY output the raw JSON array. If you cannot read the image, output an empty array []."
+    prompt = f"{system_instructions}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nSPECIFIC USER RULES & CONTEXT: {rules}\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If a value is missing or cannot be logically inferred, output 'N/A'. If you cannot read the image, output an empty array []."
     
-    response = client.chat.completions.create(
-        model="meta-llama/llama-4-scout-17b-16e-instruct", 
-        messages=[{"role": "user", "content": [{"type": "text", "text": prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
-    )
-    
-    raw_output = response.choices[0].message.content.strip()
-    
-    if "```json" in raw_output:
-        raw_output = raw_output.split("```json")[1]
-    if "```" in raw_output:
-        raw_output = raw_output.split("```")[0]
+    if "Gemini" in model_choice:
+        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+        img = Image.open(io.BytesIO(image_bytes))
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+            
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            [prompt, img],
+            generation_config={"response_mime_type": "application/json"}
+        )
+        return response.text.strip()
         
-    match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
-    return match.group(1) if match else raw_output.strip()
+    else:
+        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+        compressed_bytes = compress_image(image_bytes)
+        base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
+        groq_prompt = prompt + " NO markdown, NO conversational text. ONLY output the raw JSON array."
+        
+        response = client.chat.completions.create(
+            model="meta-llama/llama-4-scout-17b-16e-instruct", 
+            messages=[{"role": "user", "content": [{"type": "text", "text": groq_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+        )
+        raw_output = response.choices[0].message.content.strip()
+        if "```json" in raw_output:
+            raw_output = raw_output.split("```json")[1]
+        if "```" in raw_output:
+            raw_output = raw_output.split("```")[0]
+        match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
+        return match.group(1) if match else raw_output.strip()
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
@@ -138,16 +147,13 @@ try:
         return editable_dict
 
     mutable_credentials = unlock_vault(st.secrets["credentials"])
-
     authenticator = stauth.Authenticate(
         mutable_credentials,
         st.secrets["cookie"]["name"],
         st.secrets["cookie"]["key"],
         st.secrets["cookie"]["expiry_days"]
     )
-    
     authenticator.login()
-        
 except Exception as e:
     st.error(f"⚠️ Authentication System Error: The library failed to load.")
     st.error(f"Developer details: {e}")
@@ -191,16 +197,23 @@ elif auth_status == True:
         authenticator.logout("Logout", "sidebar")
         st.divider()
         
-        # --- 1. Database Connection ---
-        st.header("🔗 1. Database Connection")
+        # --- THE MISSING DROPDOWN MENU IS BACK! ---
+        st.header("🧠 1. AI Engine")
+        selected_model = st.selectbox(
+            "Select Extraction Model:", 
+            ["Google Gemini (1.5 Flash)", "Groq (Llama 4 Vision)"],
+            help="Gemini is smarter for complex medical logic. Groq is faster for simple documents."
+        )
+        st.divider()
+        
+        st.header("🔗 2. Database Connection")
         user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url)
         project_tab = username 
         st.caption(f"Routing data to secure tab: **{project_tab}**")
         
         st.divider()
         
-        # --- 2. SCHEMA DEFINITION & SYNC ---
-        st.header("📋 2. Your Schema")
+        st.header("📋 3. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
         
         if "safe_schema_val" not in st.session_state:
@@ -208,7 +221,7 @@ elif auth_status == True:
 
         col_pull, col_push = st.columns(2)
         with col_pull:
-            if st.button("⬇️ Pull Cols", use_container_width=True, help="Fetch existing headers from your sheet"):
+            if st.button("⬇️ Pull Cols", use_container_width=True):
                 if user_sheet_url and project_tab:
                     with st.spinner("Pulling..."):
                         try:
@@ -227,7 +240,7 @@ elif auth_status == True:
                     st.toast("Enter Sheet URL above first.", icon="⚠️")
 
         with col_push:
-            if st.button("⬆️ Push Cols", use_container_width=True, help="Overwrite row 1 of your sheet with these columns"):
+            if st.button("⬆️ Push Cols", use_container_width=True):
                 if user_sheet_url and project_tab:
                     with st.spinner("Pushing..."):
                         try:
@@ -242,26 +255,24 @@ elif auth_status == True:
                     st.toast("Enter Sheet URL above first.", icon="⚠️")
         
         updated_schema = st.text_input("Exact Clinical Columns:", value=st.session_state.safe_schema_val)
-        
         st.session_state.safe_schema_val = updated_schema
         st.session_state.schema_input = updated_schema
         
         extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons. Map complex abbreviations using clinical logic.")
         
         st.divider()
-        st.header("💾 3. Local Controls")
+        st.header("💾 4. Local Controls")
         if st.button("🚨 Clear Local Memory"):
             st.session_state.master_database = pd.DataFrame()
             st.rerun()
 
     st.title("☁️ CloudResearch Command Center")
 
-    # --- TABBED INTERFACE ---
     tabs = st.tabs(["📸 Data Entry, Verification & Sync", "📊 Data Explorer"])
     expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
     # ==========================================
-    # TAB 1: DATA ENTRY, VERIFICATION & SYNC
+    # TAB 1: DATA ENTRY & SYNC
     # ==========================================
     with tabs[0]:
         st.subheader("Add or Update Patients")
@@ -276,13 +287,13 @@ elif auth_status == True:
             st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
             with st.form("add_single_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-                submitted = st.form_submit_button("⚙️ Extract & Generate 1 ID", type="primary")
+                submitted = st.form_submit_button(f"⚙️ Extract with {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
-                with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
+                with st.spinner(f"{selected_model.split(' ')[0]} is reading {len(uploaded_files)} pages and compiling the profile..."):
                     master_patient_data = {col: 'N/A' for col in expected_cols}
                     for file in uploaded_files:
-                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
+                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, selected_model)
                         try:
                             ai_data_list = json.loads(raw_json) 
                         except json.JSONDecodeError:
@@ -305,7 +316,6 @@ elif auth_status == True:
                                     master_patient_data[col] = new_val
                     
                     current_batch_df = pd.DataFrame([master_patient_data])
-                    
                     existing_db_ids = set()
                     if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
                         existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
@@ -323,14 +333,14 @@ elif auth_status == True:
             st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
             with st.form("add_multiple_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-                submitted = st.form_submit_button("⚙️ Extract Roster & Generate IDs", type="primary")
+                submitted = st.form_submit_button(f"⚙️ Extract Roster with {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
                 patient_dfs = []
                 for file in uploaded_files:
-                    with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
+                    with st.spinner(f"{selected_model.split(' ')[0]} is hunting for multiple patients in {file.name}..."):
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
-                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, st.secrets["GROQ_API_KEY"])
+                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, selected_model)
                         try:
                             ai_data_list = json.loads(raw_json)
                         except json.JSONDecodeError:
@@ -349,7 +359,6 @@ elif auth_status == True:
                 
                 if patient_dfs:
                     current_batch_df = pd.concat(patient_dfs, ignore_index=True)
-                    
                     existing_db_ids = set()
                     if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
                         existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
@@ -376,7 +385,7 @@ elif auth_status == True:
                     target_id = st.text_input("Exact System_ID to update:", placeholder="CR-A4X9")
                 with col2:
                     update_files = st.file_uploader("Upload new documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-                update_submitted = st.form_submit_button("🔄 Update Patient Profile", type="primary")
+                update_submitted = st.form_submit_button(f"🔄 Update Patient with {selected_model.split(' ')[0]}", type="primary")
 
             if update_submitted:
                 if not target_id:
@@ -387,8 +396,8 @@ elif auth_status == True:
                     st.error("Please upload the documents.")
                 else:
                     for file in update_files:
-                        with st.spinner(f"Reading new data for {target_id}..."):
-                            raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
+                        with st.spinner(f"{selected_model.split(' ')[0]} is reading new data for {target_id}..."):
+                            raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, selected_model)
                             try:
                                 ai_data = json.loads(raw_json)
                             except json.JSONDecodeError:
@@ -411,7 +420,6 @@ elif auth_status == True:
                                     st.session_state.master_database.at[idx, col] = new_val
                             st.success(f"✅ Profile {target_id} successfully updated!")
 
-        # --- DATA EDITOR ---
         if not st.session_state.master_database.empty:
             st.divider()
             st.subheader("📝 Verify & Edit Data")
@@ -423,7 +431,6 @@ elif auth_status == True:
                 key="data_verifier"
             )
 
-        # --- CLOUD SYNC CONTROLS ---
         st.divider()
         st.subheader("🌐 Cloud Database Management")
         st.info("Align your app's memory with your secure Google Sheet.")
@@ -435,22 +442,18 @@ elif auth_status == True:
                     st.warning("⚠️ The local database is empty. There is nothing to save.")
                 else:
                     missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
-                    
                     if missing_ids.any():
-                        num_missing = missing_ids.sum()
-                        st.error(f"❌ Validation Failed: {num_missing} row(s) are missing a 'System_ID'. Please fix this in the table above before saving.")
+                        st.error(f"❌ Validation Failed: {missing_ids.sum()} row(s) are missing a 'System_ID'.")
                     elif not user_sheet_url or not project_tab:
                         st.error("❌ Please ensure your Database Connection is filled out in the sidebar.")
                     else:
                         with st.spinner("Aligning Columns and Overwriting Cloud..."):
                             try:
                                 final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
-                                
                                 for col in final_cols:
                                     if col not in st.session_state.master_database.columns:
                                         st.session_state.master_database[col] = 'N/A'
                                 st.session_state.master_database = st.session_state.master_database[final_cols]
-
                                 sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
                                 st.toast("✅ Cloud Updated Successfully!", icon="☁️")
                                 st.rerun()
@@ -465,23 +468,20 @@ elif auth_status == True:
                         try:
                             pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
                             st.session_state.master_database = pulled_df
-                            
                             if not pulled_df.empty:
                                 pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
                                 if pulled_cols:
                                     st.session_state.schema_input = ", ".join(pulled_cols)
-                                    
                             st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Pull Failed. Error: {e}")
-
         with col_z:
             if not st.session_state.master_database.empty:
                 csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
 
-    # # ==========================================
+    # ==========================================
     # TAB 2: DYNAMIC DATA EXPLORER
     # ==========================================
     with tabs[1]:
@@ -490,25 +490,16 @@ elif auth_status == True:
         if st.session_state.master_database.empty:
             st.info("Upload data or sync from the cloud to view statistics.")
         else:
-            # 1. Create a temporary copy so we don't alter the actual database
             df = st.session_state.master_database.copy()
             
-            # --- 2. THE AUTO-SANITIZER ---
+            # --- AUTO-SANITIZER ---
             for col in df.columns:
-                # Attempt to convert strings to actual numbers (fixes scattered Y-axis issues)
                 df[col] = pd.to_numeric(df[col], errors='ignore')
-                
-                # If the column is still text, clean up the casing and spaces
                 if df[col].dtype == 'object':
-                    # Strip spaces and force Title Case (e.g., "yeS " becomes "Yes")
                     df[col] = df[col].astype(str).str.strip().str.title()
-                    
-                    # Merge all the messy null values into one clean 'N/A' category
                     df[col] = df[col].replace({'N/A': 'N/A', 'N/a': 'N/A', 'Nan': 'N/A', 'None': 'N/A', '': 'N/A'})
-            # -----------------------------
             
             all_columns = df.columns.tolist()
-            
             col1, col2 = st.columns(2)
             with col1:
                 x_axis = st.selectbox("Select X-axis (Categorical)", all_columns)
@@ -518,7 +509,6 @@ elif auth_status == True:
             chart_type = st.radio("Chart Type", ["Bar", "Pie", "Scatter"], horizontal=True)
 
             try:
-                # Remove N/A values from the specific axes we are graphing for a much cleaner chart
                 clean_chart_df = df[~df[x_axis].isin(['N/A'])]
                 clean_chart_df = clean_chart_df[~clean_chart_df[y_axis].isin(['N/A'])]
 
