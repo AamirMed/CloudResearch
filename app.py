@@ -185,7 +185,7 @@ elif auth_status == True:
         authenticator.logout("Logout", "sidebar")
         st.divider()
         
-        # --- 1. MOVED UP: Database Connection ---
+        # --- 1. Database Connection ---
         st.header("🔗 1. Database Connection")
         user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url)
         project_tab = username 
@@ -196,7 +196,10 @@ elif auth_status == True:
         # --- 2. SCHEMA DEFINITION & SYNC ---
         st.header("📋 2. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
-        st.text_input("Exact Clinical Columns:", key="schema_input")
+        
+        # FIX: Decoupled widget to allow programmatic updates
+        updated_schema = st.text_input("Exact Clinical Columns:", value=st.session_state.schema_input)
+        st.session_state.schema_input = updated_schema
         
         # Dedicated Schema Sync Buttons
         col_pull, col_push = st.columns(2)
@@ -205,7 +208,7 @@ elif auth_status == True:
                 if user_sheet_url and project_tab:
                     try:
                         sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
-                        cloud_headers = sheet.row_values(1) # Only grabs the first row
+                        cloud_headers = sheet.row_values(1)
                         if cloud_headers:
                             clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
                             st.session_state.schema_input = ", ".join(clean_headers)
@@ -224,7 +227,6 @@ elif auth_status == True:
                         sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
                         current_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
                         final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
-                        # Updates ONLY the first row, leaving your data safe
                         sheet.update(range_name="A1", values=[final_headers]) 
                         st.toast("✅ Cloud headers updated!", icon="☁️")
                     except Exception as e:
@@ -409,7 +411,7 @@ elif auth_status == True:
                 key="data_verifier"
             )
 
-        # --- CLOUD SYNC CONTROLS (Moved to Tab 1) ---
+        # --- CLOUD SYNC CONTROLS ---
         st.divider()
         st.subheader("🌐 Cloud Database Management")
         st.info("Align your app's memory with your secure Google Sheet.")
@@ -417,11 +419,9 @@ elif auth_status == True:
 
         with col_x:
             if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
-                # --- NEW: DATA VALIDATION LAYER ---
                 if st.session_state.master_database.empty:
                     st.warning("⚠️ The local database is empty. There is nothing to save.")
                 else:
-                    # Check for any missing or invalid System_IDs
                     missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
                     
                     if missing_ids.any():
@@ -430,7 +430,6 @@ elif auth_status == True:
                     elif not user_sheet_url or not project_tab:
                         st.error("❌ Please ensure your Database Connection is filled out in the sidebar.")
                     else:
-                        # --- ORIGINAL PUSH LOGIC ---
                         with st.spinner("Aligning Columns and Overwriting Cloud..."):
                             try:
                                 final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
@@ -481,7 +480,6 @@ elif auth_status == True:
         else:
             df = st.session_state.master_database
             
-            # 1. Automatic Column Selection
             all_columns = df.columns.tolist()
             
             col1, col2 = st.columns(2)
@@ -490,7 +488,6 @@ elif auth_status == True:
             with col2:
                 y_axis = st.selectbox("Select Y-axis (Numerical)", all_columns)
 
-            # 2. Dynamic Chart Generation
             chart_type = st.radio("Chart Type", ["Bar", "Pie", "Scatter"], horizontal=True)
 
             try:
