@@ -5,11 +5,14 @@ import numpy as np
 import base64
 import json
 import re
+import random
+import string
 from groq import Groq
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from PIL import Image
 import io
+import plotly.express as px
 
 # --- 1. UI SETUP ---
 st.set_page_config(page_title="CloudResearch Command Center", layout="wide", page_icon="☁️")
@@ -20,6 +23,15 @@ def get_google_sheet_client():
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
     return gspread.authorize(creds)
+
+# SECURE 4-DIGIT ID GENERATOR
+def generate_unique_id(existing_ids):
+    alphabet = string.ascii_uppercase + string.digits 
+    while True:
+        random_str = "".join(random.choices(alphabet, k=4))
+        new_id = f"CR-{random_str}"
+        if new_id not in existing_ids:
+            return new_id
 
 def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     google_client = get_google_sheet_client()
@@ -43,17 +55,22 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
             cloud_df.rename(columns=lambda x: 'System_ID' if str(x).strip().lower() in ['system_id', 'system id'] else x, inplace=True)
             
             if 'System_ID' not in cloud_df.columns:
-                cloud_df.insert(0, 'System_ID', [f"CR-{1000 + i}" for i in range(len(cloud_df))])
+                existing = set()
+                new_ids = []
+                for _ in range(len(cloud_df)):
+                    nid = generate_unique_id(existing)
+                    new_ids.append(nid)
+                    existing.add(nid)
+                cloud_df.insert(0, 'System_ID', new_ids)
             else:
                 missing_mask = cloud_df['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
                 if missing_mask.any():
-                    valid_ids = cloud_df.loc[~missing_mask, 'System_ID'].astype(str).str.extract(r'(\d+)').dropna().astype(int)
-                    start_val = int(valid_ids.max()[0]) + 1 if not valid_ids.empty else 1000
-                    
+                    existing_valid = set(cloud_df.loc[~missing_mask, 'System_ID'].astype(str).tolist())
                     new_ids = []
                     for _ in range(missing_mask.sum()):
-                        new_ids.append(f"CR-{start_val}")
-                        start_val += 1
+                        nid = generate_unique_id(existing_valid)
+                        new_ids.append(nid)
+                        existing_valid.add(nid)
                     cloud_df.loc[missing_mask, 'System_ID'] = new_ids
         return cloud_df
 
@@ -67,7 +84,6 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
             data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
             sheet.update(range_name="A1", values=data_to_upload)
         else:
-            # If the dataframe is completely empty but has columns (headers), push the headers!
             data_to_upload = [local_dataframe.columns.values.tolist()]
             sheet.update(range_name="A1", values=data_to_upload)
         return local_dataframe
@@ -87,7 +103,7 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
     base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
     
     system_instructions = "You are an expert clinical data extractor. Map informal abbreviations to standard nomenclature."
-    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. NO markdown, NO conversational text. ONLY output the raw JSON array."
+    prompt = f"{system_instructions}\nExtract data from this medical document. REQUIRED EXACT KEYS: [{columns}]\nUSER RULES: {rules}\nSTRICT JSON PROTOCOL: Output a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. NO markdown, NO conversational text. ONLY output the raw JSON array. If you cannot read the image, output an empty array []."
     
     response = client.chat.completions.create(
         model="meta-llama/llama-4-scout-17b-16e-instruct", 
@@ -102,9 +118,7 @@ def blueprint_decoder(image_bytes, columns, rules, api_key):
         raw_output = raw_output.split("```")[0]
         
     match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
-    clean_json = match.group(1) if match else raw_output.strip()
-    
-    return clean_json
+    return match.group(1) if match else raw_output.strip()
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
@@ -150,7 +164,6 @@ elif auth_status == True:
     saved_sheet_url = user_prefs.get("sheet_url", "")
     saved_schema = user_prefs.get("default_schema", "Age, Gender, Organism")
 
-    # Initialize the dynamic text box memory
     if "schema_input" not in st.session_state:
         st.session_state.schema_input = saved_schema
 
@@ -160,7 +173,6 @@ elif auth_status == True:
             try:
                 pulled_df = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username, mode="pull")
                 st.session_state.master_database = pulled_df
-                # SILENT PULL ON LOGIN: Update the text box with Cloud Columns
                 if not pulled_df.empty:
                     pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
                     if pulled_cols:
@@ -175,10 +187,7 @@ elif auth_status == True:
         
         st.header("📋 1. Your Schema")
         st.warning("Do NOT type 'System_ID' here.")
-        
-        # This text box is now dynamically linked to the "schema_input" memory
         st.text_input("Exact Clinical Columns:", key="schema_input")
-        
         extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
         
         st.divider()
@@ -195,31 +204,42 @@ elif auth_status == True:
 
     st.title("☁️ CloudResearch Command Center")
 
-    # --- 5. DATA ENTRY MODE ---
-    st.subheader("📸 Step 1: Data Entry Mode")
-    entry_mode = st.radio(
-        "Select your workflow:", 
-        ["🆕 Single Patient (Merge Pages)", "📋 Multiple Patients (Roster)", "🔄 Update Existing"], 
-        index=0
-    )
-    st.divider()
-    
-    # We dynamically read whatever is currently in the text box
+    # --- TABBED INTERFACE ---
+    tabs = st.tabs(["📸 Data Entry & Verification", "📊 Clinical Analytics", "🌐 Cloud Database Sync"])
     expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
-    if "Single Patient" in entry_mode:
-        st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
-        with st.form("add_single_form", clear_on_submit=True):
-            uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-            submitted = st.form_submit_button("⚙️ Extract & Generate 1 ID", type="primary")
+    # ==========================================
+    # TAB 1: DATA ENTRY
+    # ==========================================
+    with tabs[0]:
+        st.subheader("Add or Update Patients")
+        entry_mode = st.radio(
+            "Select your workflow:", 
+            ["🆕 Single Patient (Merge Pages)", "📋 Multiple Patients (Roster)", "🔄 Update Existing"], 
+            index=0, horizontal=True
+        )
+        st.divider()
 
-        if submitted and uploaded_files:
-            with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
-                master_patient_data = {col: 'N/A' for col in expected_cols}
-                for file in uploaded_files:
-                    try:
+        if "Single Patient" in entry_mode:
+            st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
+            with st.form("add_single_form", clear_on_submit=True):
+                uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                submitted = st.form_submit_button("⚙️ Extract & Generate 1 ID", type="primary")
+
+            if submitted and uploaded_files:
+                with st.spinner(f"AI is reading {len(uploaded_files)} pages and compiling the profile..."):
+                    master_patient_data = {col: 'N/A' for col in expected_cols}
+                    for file in uploaded_files:
                         raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
-                        ai_data_list = json.loads(raw_json) 
+                        # --- AI SAFETY NET ---
+                        try:
+                            ai_data_list = json.loads(raw_json) 
+                        except json.JSONDecodeError:
+                            st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
+                            with st.expander("See what the AI actually said"):
+                                st.text(raw_json)
+                            continue
+
                         if isinstance(ai_data_list, list) and len(ai_data_list) > 0:
                             ai_data = ai_data_list[0] 
                         elif isinstance(ai_data_list, dict):
@@ -232,42 +252,43 @@ elif auth_status == True:
                             if new_val not in ['N/A', 'nan', '', 'None']:
                                 if master_patient_data[col] == 'N/A':
                                     master_patient_data[col] = new_val
-                    except Exception as e:
-                        st.error(f"Could not read {file.name}. Error: {e}")
-                
-                current_batch_df = pd.DataFrame([master_patient_data])
-                
-                if st.session_state.master_database.empty or 'System_ID' not in st.session_state.master_database.columns:
-                    start_num = 1000
-                else:
-                    existing_ids = st.session_state.master_database['System_ID'].astype(str)
-                    nums = existing_ids.str.extract(r'(\d+)').dropna().astype(int)
-                    start_num = int(nums.max()[0]) + 1 if not nums.empty else 1000
-                
-                new_id = f"CR-{start_num}"
-                current_batch_df.insert(0, "System_ID", [new_id])
-                
-                if not st.session_state.master_database.empty:
-                    st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
-                else:
-                    st.session_state.master_database = current_batch_df
-                st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
+                    
+                    current_batch_df = pd.DataFrame([master_patient_data])
+                    
+                    existing_db_ids = set()
+                    if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
+                        existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
+                    
+                    new_id = generate_unique_id(existing_db_ids)
+                    current_batch_df.insert(0, "System_ID", [new_id])
+                    
+                    if not st.session_state.master_database.empty:
+                        st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
+                    else:
+                        st.session_state.master_database = current_batch_df
+                    st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
 
-    elif "Multiple Patients" in entry_mode:
-        st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
-        with st.form("add_multiple_form", clear_on_submit=True):
-            uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-            submitted = st.form_submit_button("⚙️ Extract Roster & Generate IDs", type="primary")
+        elif "Multiple Patients" in entry_mode:
+            st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
+            with st.form("add_multiple_form", clear_on_submit=True):
+                uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                submitted = st.form_submit_button("⚙️ Extract Roster & Generate IDs", type="primary")
 
-        if submitted and uploaded_files:
-            patient_dfs = []
-            for file in uploaded_files:
-                with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
-                    try:
+            if submitted and uploaded_files:
+                patient_dfs = []
+                for file in uploaded_files:
+                    with st.spinner(f"AI is hunting for multiple patients in {file.name}..."):
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
                         raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, st.secrets["GROQ_API_KEY"])
-                        ai_data_list = json.loads(raw_json) 
-                        
+                        # --- AI SAFETY NET ---
+                        try:
+                            ai_data_list = json.loads(raw_json)
+                        except json.JSONDecodeError:
+                            st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
+                            with st.expander("See what the AI actually said"):
+                                st.text(raw_json)
+                            continue
+                            
                         if isinstance(ai_data_list, dict):
                             ai_data_list = [ai_data_list]
                             
@@ -275,52 +296,58 @@ elif auth_status == True:
                             filtered_data = {col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip() for col in expected_cols}
                             if any(val not in ['N/A', 'nan', '', 'None'] for val in filtered_data.values()):
                                 patient_dfs.append(pd.DataFrame([filtered_data]))
-                                
-                    except Exception as e:
-                        st.error(f"Could not read {file.name}. Error: {e}")
-            
-            if patient_dfs:
-                current_batch_df = pd.concat(patient_dfs, ignore_index=True)
                 
-                if st.session_state.master_database.empty or 'System_ID' not in st.session_state.master_database.columns:
-                    start_num = 1000
-                else:
-                    existing_ids = st.session_state.master_database['System_ID'].astype(str)
-                    nums = existing_ids.str.extract(r'(\d+)').dropna().astype(int)
-                    start_num = int(nums.max()[0]) + 1 if not nums.empty else 1000
-                
-                new_ids = [f"CR-{start_num + i}" for i in range(len(current_batch_df))]
-                current_batch_df.insert(0, "System_ID", new_ids)
-                
-                if not st.session_state.master_database.empty:
-                    st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
-                else:
-                    st.session_state.master_database = current_batch_df
-                st.success(f"✅ Extracted {len(current_batch_df)} patients from the roster! IDs assigned: {new_ids[0]} to {new_ids[-1]}")
+                if patient_dfs:
+                    current_batch_df = pd.concat(patient_dfs, ignore_index=True)
+                    
+                    existing_db_ids = set()
+                    if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
+                        existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
+                    
+                    new_ids = []
+                    for _ in range(len(current_batch_df)):
+                        nid = generate_unique_id(existing_db_ids)
+                        new_ids.append(nid)
+                        existing_db_ids.add(nid)
 
-    elif "Update" in entry_mode:
-        st.info("Check your Google Sheet for the patient's 'System_ID'. Type it below to add new data.")
-        with st.form("update_form", clear_on_submit=True):
-            col1, col2 = st.columns([1, 2])
-            with col1:
-                target_id = st.text_input("Exact System_ID to update:", placeholder="CR-1005")
-            with col2:
-                update_files = st.file_uploader("Upload new documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
-            update_submitted = st.form_submit_button("🔄 Update Patient Profile", type="primary")
+                    current_batch_df.insert(0, "System_ID", new_ids)
+                    
+                    if not st.session_state.master_database.empty:
+                        st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
+                    else:
+                        st.session_state.master_database = current_batch_df
+                    st.success(f"✅ Extracted {len(current_batch_df)} patients from the roster! IDs assigned: {new_ids[0]} to {new_ids[-1]}")
 
-        if update_submitted:
-            if not target_id:
-                st.error("You must provide the System_ID.")
-            elif st.session_state.master_database.empty or target_id not in st.session_state.master_database['System_ID'].values:
-                st.error(f"❌ Could not find '{target_id}' in local memory. Did you Pull from the cloud first?")
-            elif not update_files:
-                st.error("Please upload the documents.")
-            else:
-                for file in update_files:
-                    with st.spinner(f"Reading new data for {target_id}..."):
-                        try:
+        elif "Update" in entry_mode:
+            st.info("Check your database for the patient's 'System_ID'. Type it below to add new data.")
+            with st.form("update_form", clear_on_submit=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    target_id = st.text_input("Exact System_ID to update:", placeholder="CR-A4X9")
+                with col2:
+                    update_files = st.file_uploader("Upload new documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                update_submitted = st.form_submit_button("🔄 Update Patient Profile", type="primary")
+
+            if update_submitted:
+                if not target_id:
+                    st.error("You must provide the System_ID.")
+                elif st.session_state.master_database.empty or target_id not in st.session_state.master_database['System_ID'].values:
+                    st.error(f"❌ Could not find '{target_id}' in local memory. Did you Pull from the cloud first?")
+                elif not update_files:
+                    st.error("Please upload the documents.")
+                else:
+                    for file in update_files:
+                        with st.spinner(f"Reading new data for {target_id}..."):
                             raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, st.secrets["GROQ_API_KEY"])
-                            ai_data = json.loads(raw_json)
+                            # --- AI SAFETY NET ---
+                            try:
+                                ai_data = json.loads(raw_json)
+                            except json.JSONDecodeError:
+                                st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
+                                with st.expander("See what the AI actually said"):
+                                    st.text(raw_json)
+                                continue
+
                             if isinstance(ai_data, list) and len(ai_data) > 0:
                                 ai_data = ai_data[0] 
                             elif isinstance(ai_data, dict):
@@ -334,74 +361,124 @@ elif auth_status == True:
                                 if new_val not in ['N/A', 'nan', '', 'None']: 
                                     st.session_state.master_database.at[idx, col] = new_val
                             st.success(f"✅ Profile {target_id} successfully updated!")
-                        except Exception as e:
-                            st.error(f"Extraction failed: {e}")
 
-    # --- 6. HUMAN-IN-THE-LOOP EDITOR ---
-    if not st.session_state.master_database.empty:
-        st.divider()
-        st.subheader("📝 Step 2: Verify & Edit Data")
-        st.session_state.master_database = st.data_editor(
-            st.session_state.master_database, 
-            num_rows="dynamic", 
-            use_container_width=True,
-            key="data_verifier"
-        )
-
-    # --- 7. CLOUD SYNC (DYNAMIC SCHEMA PUSH/PULL) ---
-    st.divider()
-    st.subheader("🌐 Step 3: Finalize & Sync")
-    col_x, col_y, col_z = st.columns([1, 1, 1])
-
-    with col_x:
-        if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
-            with st.spinner("Aligning Columns and Overwriting Cloud..."):
-                if not user_sheet_url or not project_tab:
-                    st.error("❌ Please ensure your Database Connection is filled out.")
-                else:
-                    try:
-                        # 1. We forcefully construct the exact columns from the text box
-                        final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
-                        
-                        # 2. We align our local dataframe to exactly match those columns
-                        if st.session_state.master_database.empty:
-                            st.session_state.master_database = pd.DataFrame(columns=final_cols)
-                        else:
-                            for col in final_cols:
-                                if col not in st.session_state.master_database.columns:
-                                    st.session_state.master_database[col] = 'N/A' # Add new columns
-                            # This drops any deleted columns and puts them in the correct order!
-                            st.session_state.master_database = st.session_state.master_database[final_cols]
-
-                        # 3. Push the newly aligned data to Google
-                        sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
-                        st.toast("✅ Cloud Updated with New Columns!", icon="☁️")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Push Failed. Error: {e}")
-
-    with col_y:
-        if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
-            with st.spinner("Reading Google Sheet Columns..."):
-                if not user_sheet_url or not project_tab:
-                    st.error("❌ Please ensure your Database Connection is filled out.")
-                else:
-                    try:
-                        pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
-                        st.session_state.master_database = pulled_df
-                        
-                        # 4. We grab the columns from Google and overwrite the Text Box
-                        if not pulled_df.empty:
-                            pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
-                            if pulled_cols:
-                                st.session_state.schema_input = ", ".join(pulled_cols)
-                                
-                        st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Pull Failed. Error: {e}")
-
-    with col_z:
+        # --- DATA EDITOR IN TAB 1 ---
         if not st.session_state.master_database.empty:
-            csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
-            st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
+            st.divider()
+            st.subheader("📝 Verify & Edit Data")
+            st.caption("Double-click any cell to manually correct the AI before saving to cloud.")
+            st.session_state.master_database = st.data_editor(
+                st.session_state.master_database, 
+                num_rows="dynamic", 
+                use_container_width=True,
+                key="data_verifier"
+            )
+
+    # ==========================================
+    # TAB 2: ANALYTICS & STATS
+    # ==========================================
+    with tabs[1]:
+        st.subheader("📈 Real-time Clinical Statistics")
+        if st.session_state.master_database.empty:
+            st.info("Upload data or sync from the cloud to view statistics.")
+        else:
+            df = st.session_state.master_database
+            col1, col2 = st.columns(2)
+
+            with col1:
+                # Look for an 'Organism' column (case-insensitive)
+                org_col = next((c for c in df.columns if 'organism' in c.lower()), None)
+                if org_col:
+                    st.write("**Organism Distribution**")
+                    # Filter out N/A values for cleaner chart
+                    clean_df = df[~df[org_col].isin(['N/A', 'nan', '', 'None'])]
+                    if not clean_df.empty:
+                        fig_pie = px.pie(clean_df, names=org_col, hole=0.3, color_discrete_sequence=px.colors.qualitative.Pastel)
+                        st.plotly_chart(fig_pie, use_container_width=True)
+                    else:
+                        st.write("No valid organism data to plot yet.")
+                else:
+                    st.warning("No 'Organism' column found in your schema.")
+
+            with col2:
+                # Detect antibiotic columns by looking for keywords or S/R values
+                sens_cols = [c for c in df.columns if any(keyword in c.lower() for keyword in ['sensitivity', 'cipro', 'amox', 'penicillin', 'gentamicin'])]
+                # Fallback: find any columns that mostly contain 'S' or 'R'
+                if not sens_cols:
+                    for c in df.columns:
+                        unique_vals = set(df[c].astype(str).str.upper().unique())
+                        if 'S' in unique_vals or 'R' in unique_vals:
+                            sens_cols.append(c)
+
+                if sens_cols:
+                    st.write("**Antibiotic Resistance Profile**")
+                    # Melt dataframe for plotting
+                    melted = df[sens_cols].melt(var_name='Antibiotic', value_name='Status')
+                    # Standardize Status text
+                    melted['Status'] = melted['Status'].astype(str).str.upper().str.strip()
+                    clean_melted = melted[melted['Status'].isin(['S', 'R'])] # Only plot S and R
+                    
+                    if not clean_melted.empty:
+                        fig_bar = px.histogram(clean_melted, x='Antibiotic', color='Status', barmark='group', 
+                                             color_discrete_map={'S': '#2ecc71', 'R': '#e74c3c'})
+                        st.plotly_chart(fig_bar, use_container_width=True)
+                    else:
+                        st.write("No 'S' or 'R' data to plot yet.")
+                else:
+                    st.warning("No antibiotic sensitivity columns detected.")
+
+    # ==========================================
+    # TAB 3: CLOUD SYNC
+    # ==========================================
+    with tabs[2]:
+        st.subheader("🌐 Cloud Database Management")
+        st.info("Align your app's memory with your secure Google Sheet.")
+        col_x, col_y, col_z = st.columns([1, 1, 1])
+
+        with col_x:
+            if st.button("⬆️ SAVE TO CLOUD", type="primary", use_container_width=True):
+                with st.spinner("Aligning Columns and Overwriting Cloud..."):
+                    if not user_sheet_url or not project_tab:
+                        st.error("❌ Please ensure your Database Connection is filled out.")
+                    else:
+                        try:
+                            final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
+                            
+                            if st.session_state.master_database.empty:
+                                st.session_state.master_database = pd.DataFrame(columns=final_cols)
+                            else:
+                                for col in final_cols:
+                                    if col not in st.session_state.master_database.columns:
+                                        st.session_state.master_database[col] = 'N/A'
+                                st.session_state.master_database = st.session_state.master_database[final_cols]
+
+                            sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
+                            st.toast("✅ Cloud Updated with New Columns!", icon="☁️")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Push Failed. Error: {e}")
+
+        with col_y:
+            if st.button("⬇️ PULL FROM CLOUD", use_container_width=True):
+                with st.spinner("Reading Google Sheet Columns..."):
+                    if not user_sheet_url or not project_tab:
+                        st.error("❌ Please ensure your Database Connection is filled out.")
+                    else:
+                        try:
+                            pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                            st.session_state.master_database = pulled_df
+                            
+                            if not pulled_df.empty:
+                                pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
+                                if pulled_cols:
+                                    st.session_state.schema_input = ", ".join(pulled_cols)
+                                    
+                            st.toast("✅ App Columns aligned to Google Sheets!", icon="⬇️")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Pull Failed. Error: {e}")
+
+        with col_z:
+            if not st.session_state.master_database.empty:
+                csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
