@@ -185,16 +185,54 @@ elif auth_status == True:
         authenticator.logout("Logout", "sidebar")
         st.divider()
         
-        st.header("📋 1. Your Schema")
-        st.warning("Do NOT type 'System_ID' here.")
-        st.text_input("Exact Clinical Columns:", key="schema_input")
-        extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
-        
-        st.divider()
-        st.header("🔗 2. Database Connection")
+        # --- 1. MOVED UP: Database Connection ---
+        st.header("🔗 1. Database Connection")
         user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url)
         project_tab = username 
         st.caption(f"Routing data to secure tab: **{project_tab}**")
+        
+        st.divider()
+        
+        # --- 2. SCHEMA DEFINITION & SYNC ---
+        st.header("📋 2. Your Schema")
+        st.warning("Do NOT type 'System_ID' here.")
+        st.text_input("Exact Clinical Columns:", key="schema_input")
+        
+        # Dedicated Schema Sync Buttons
+        col_pull, col_push = st.columns(2)
+        with col_pull:
+            if st.button("⬇️ Pull Cols", use_container_width=True, help="Fetch existing headers from your sheet"):
+                if user_sheet_url and project_tab:
+                    try:
+                        sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                        cloud_headers = sheet.row_values(1) # Only grabs the first row
+                        if cloud_headers:
+                            clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
+                            st.session_state.schema_input = ", ".join(clean_headers)
+                            st.rerun()
+                        else:
+                            st.toast("Sheet is completely empty.", icon="⚠️")
+                    except Exception as e:
+                        st.toast(f"Error pulling columns: {e}", icon="❌")
+                else:
+                    st.toast("Enter Sheet URL above first.", icon="⚠️")
+
+        with col_push:
+            if st.button("⬆️ Push Cols", use_container_width=True, help="Overwrite row 1 of your sheet with these columns"):
+                if user_sheet_url and project_tab:
+                    try:
+                        sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                        current_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
+                        final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
+                        # Updates ONLY the first row, leaving your data safe
+                        sheet.update(range_name="A1", values=[final_headers]) 
+                        st.toast("✅ Cloud headers updated!", icon="☁️")
+                    except Exception as e:
+                        st.toast(f"Error pushing columns: {e}", icon="❌")
+                else:
+                    st.toast("Enter Sheet URL above first.", icon="⚠️")
+                    
+        extra_rules = st.text_area("Specific Rules:", "If marked S write Sensitive. If R write Resistant. Strip colons.")
         
         st.divider()
         st.header("💾 3. Local Controls")
@@ -431,7 +469,6 @@ elif auth_status == True:
             if not st.session_state.master_database.empty:
                 csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
                 st.download_button("📥 BACKUP TO CSV", data=csv_data, file_name=f"{project_tab}_backup.csv", mime="text/csv", use_container_width=True)
-
 
     # ==========================================
     # TAB 2: DYNAMIC DATA EXPLORER
