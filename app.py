@@ -110,7 +110,8 @@ def blueprint_decoder(image_bytes, columns, rules, model_choice):
         if img.mode != 'RGB':
             img = img.convert('RGB')
             
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # POINTING TO THE ACTIVE 2.5 MODEL
+        model = genai.GenerativeModel('gemini-2.5-flash')
         response = model.generate_content(
             [prompt, img],
             generation_config={"response_mime_type": "application/json"}
@@ -197,11 +198,10 @@ elif auth_status == True:
         authenticator.logout("Logout", "sidebar")
         st.divider()
         
-        # --- THE MISSING DROPDOWN MENU IS BACK! ---
         st.header("🧠 1. AI Engine")
         selected_model = st.selectbox(
             "Select Extraction Model:", 
-            ["Google Gemini (1.5 Flash)", "Groq (Llama 4 Vision)"],
+            ["Google Gemini (2.5 Flash)", "Groq (Llama 4 Vision)"],
             help="Gemini is smarter for complex medical logic. Groq is faster for simple documents."
         )
         st.divider()
