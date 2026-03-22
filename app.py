@@ -258,7 +258,7 @@ elif auth_status == True:
         st.divider()
         
         st.header("3. Target Schema")
-        st.info("System_ID is automatically generated.")
+        st.info("System IDs are auto-generated to prevent duplicate records and ensure safe cloud synchronization.")
         
         if "safe_schema_val" not in st.session_state:
             st.session_state.safe_schema_val = st.session_state.schema_input
@@ -306,23 +306,23 @@ elif auth_status == True:
         
         st.header("4. Extraction Logic")
         st.session_state.user_prompt = st.text_area(
-            "🧠 Prompt", 
+            "Primary Directive", 
             value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents.")
         )
         
-        with st.expander("⚙️ Advanced Options (optional)"):
+        with st.expander("Advanced Extraction Constraints"):
             st.session_state.abbreviations = st.text_area(
-                "Abbreviations", 
+                "Abbreviations Map", 
                 value=st.session_state.get("abbreviations", ""), 
                 placeholder="DM → Diabetes Mellitus\nHTN → Hypertension\nS → Sensitive\nR → Resistant"
             )
             st.session_state.extra_rules = st.text_area(
-                "Extra Rules", 
+                "Inclusion Rules", 
                 value=st.session_state.get("extra_rules", ""), 
                 placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple present\n- Ignore illegible text"
             )
             st.session_state.anti_rules = st.text_area(
-                "Anti-Rules", 
+                "Exclusion Rules", 
                 value=st.session_state.get("anti_rules", ""), 
                 placeholder="- Do not hallucinate values\n- Do not infer missing data"
             )
