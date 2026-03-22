@@ -8,3 +8,4 @@ Pillow
 plotly
 streamlit-authenticator
 google-generativeai
+PyMuPDF
