@@ -10,8 +10,9 @@ import string
 from groq import Groq
 import google.generativeai as genai
 import gspread
-from google.oauth2.service_account import Credentials # Replaced deprecated oauth2client
+from google.oauth2.service_account import Credentials
 from PIL import Image
+import fitz  # PyMuPDF for PDF shredding
 import io
 import plotly.express as px
 
@@ -26,7 +27,6 @@ if "GEMINI_API_KEY" in st.secrets:
 def get_google_sheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    # Using modern Google Auth library
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
 
@@ -99,6 +99,16 @@ def compress_image(image_bytes):
     img.save(output, format="JPEG", quality=85)
     return output.getvalue()
 
+# --- NEW: THE PDF SHREDDER ---
+def convert_pdf_to_images(pdf_bytes):
+    image_list = []
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        pix = page.get_pixmap(dpi=150) 
+        image_list.append(pix.tobytes("jpeg"))
+    return image_list
+
 def blueprint_decoder(image_bytes, columns, rules, model_choice):
     system_instructions = (
         "You are an expert clinical data extractor and medical interpreter. "
@@ -109,11 +119,9 @@ def blueprint_decoder(image_bytes, columns, rules, model_choice):
     prompt = f"{system_instructions}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nSPECIFIC USER RULES & CONTEXT: {rules}\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If a value is missing or cannot be logically inferred, output 'N/A'. If you cannot read the image, output an empty array []."
     
     if "Gemini" in model_choice:
-        # Pass Gemini images through the compressor first to save quota/bandwidth
         compressed_bytes = compress_image(image_bytes)
         img = Image.open(io.BytesIO(compressed_bytes))
             
-        # Dynamically pull the model string from secrets, fallback to stable version
         gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
         model = genai.GenerativeModel(gemini_model_name)
         
@@ -196,7 +204,6 @@ elif auth_status == True:
                     if pulled_cols:
                         st.session_state.schema_input = ", ".join(pulled_cols)
             except Exception as e:
-                # Replaced silent fail with loud warning
                 st.error(f"⚠️ Background sync failed to connect to Google Sheets: {e}") 
 
     with st.sidebar:
@@ -268,7 +275,6 @@ elif auth_status == True:
         
         st.divider()
         st.header("💾 4. Local Controls")
-        # Wrapped Memory wipe in an expander confirmation
         with st.expander("🚨 Danger Zone"):
             st.warning("This will erase unsaved local data from the screen.")
             if st.button("Clear Local Memory", type="primary", use_container_width=True):
@@ -295,23 +301,30 @@ elif auth_status == True:
         if "Single Patient" in entry_mode:
             st.info("Upload all pages for a SINGLE patient. The AI will merge the data and assign ONE ID.")
             with st.form("add_single_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                # ADDED PDF TO UPLOADER
+                uploaded_files = st.file_uploader("Upload patient documents:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
                 submitted = st.form_submit_button(f"⚙️ Extract with {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
-                with st.spinner(f"{selected_model.split(' ')[0]} is reading {len(uploaded_files)} pages and compiling the profile..."):
-                    master_patient_data = {col: 'N/A' for col in expected_cols}
+                # --- PDF INTERCEPTOR ---
+                with st.spinner(f"{selected_model.split(' ')[0]} is preparing the files..."):
+                    ready_images = []
                     for file in uploaded_files:
-                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, selected_model)
+                        if file.name.lower().endswith('.pdf'):
+                            ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                        else:
+                            ready_images.append(file.getvalue())
+
+                with st.spinner(f"{selected_model.split(' ')[0]} is reading {len(ready_images)} pages and compiling the profile..."):
+                    master_patient_data = {col: 'N/A' for col in expected_cols}
+                    # Iterate through the newly prepared images (which includes shredded PDFs)
+                    for image_bytes in ready_images:
+                        raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, extra_rules, selected_model)
                         try:
                             ai_data_list = json.loads(raw_json) 
                         except json.JSONDecodeError:
-                            st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
-                            with st.expander("See what the AI actually said"):
-                                st.text(raw_json)
-                            continue
+                            continue # Skip unreadable pages
 
-                        # Ensure it's a list so we can iterate through it properly and capture all objects
                         if isinstance(ai_data_list, dict):
                             ai_data_list = [ai_data_list]
                         elif not isinstance(ai_data_list, list):
@@ -336,26 +349,33 @@ elif auth_status == True:
                         st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
                     else:
                         st.session_state.master_database = current_batch_df
-                    st.success(f"✅ Successfully merged {len(uploaded_files)} pages into a single patient! ID assigned: {new_id}")
+                    st.success(f"✅ Successfully merged {len(ready_images)} pages into a single patient! ID assigned: {new_id}")
 
         elif "Multiple Patients" in entry_mode:
             st.info("Upload rosters or multi-patient reports. The AI will extract EVERY patient and assign unique IDs.")
             with st.form("add_multiple_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                # ADDED PDF TO UPLOADER
+                uploaded_files = st.file_uploader("Upload roster documents:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
                 submitted = st.form_submit_button(f"⚙️ Extract Roster with {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
+                # --- PDF INTERCEPTOR ---
+                with st.spinner(f"{selected_model.split(' ')[0]} is preparing the files..."):
+                    ready_images = []
+                    for file in uploaded_files:
+                        if file.name.lower().endswith('.pdf'):
+                            ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                        else:
+                            ready_images.append(file.getvalue())
+
                 patient_dfs = []
-                for file in uploaded_files:
-                    with st.spinner(f"{selected_model.split(' ')[0]} is hunting for multiple patients in {file.name}..."):
+                for i, image_bytes in enumerate(ready_images):
+                    with st.spinner(f"{selected_model.split(' ')[0]} is hunting for multiple patients in page {i+1}..."):
                         roster_rules = extra_rules + " CRITICAL: Extract EVERY patient as a separate JSON object in the array."
-                        raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, roster_rules, selected_model)
+                        raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, roster_rules, selected_model)
                         try:
                             ai_data_list = json.loads(raw_json)
                         except json.JSONDecodeError:
-                            st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
-                            with st.expander("See what the AI actually said"):
-                                st.text(raw_json)
                             continue
                             
                         if isinstance(ai_data_list, dict):
@@ -393,7 +413,8 @@ elif auth_status == True:
                 with col1:
                     target_id = st.text_input("Exact System_ID to update:", placeholder="CR-A4X9")
                 with col2:
-                    update_files = st.file_uploader("Upload new documents:", type=['png', 'jpg', 'jpeg'], accept_multiple_files=True)
+                    # ADDED PDF TO UPLOADER
+                    update_files = st.file_uploader("Upload new documents:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
                 update_submitted = st.form_submit_button(f"🔄 Update Patient with {selected_model.split(' ')[0]}", type="primary")
 
             if update_submitted:
@@ -404,15 +425,21 @@ elif auth_status == True:
                 elif not update_files:
                     st.error("Please upload the documents.")
                 else:
-                    for file in update_files:
-                        with st.spinner(f"{selected_model.split(' ')[0]} is reading new data for {target_id}..."):
-                            raw_json = blueprint_decoder(file.getvalue(), st.session_state.schema_input, extra_rules, selected_model)
+                    # --- PDF INTERCEPTOR ---
+                    with st.spinner(f"{selected_model.split(' ')[0]} is preparing the files..."):
+                        ready_images = []
+                        for file in update_files:
+                            if file.name.lower().endswith('.pdf'):
+                                ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                            else:
+                                ready_images.append(file.getvalue())
+
+                    for i, image_bytes in enumerate(ready_images):
+                        with st.spinner(f"{selected_model.split(' ')[0]} is reading new data from page {i+1} for {target_id}..."):
+                            raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, extra_rules, selected_model)
                             try:
                                 ai_data = json.loads(raw_json)
                             except json.JSONDecodeError:
-                                st.error(f"❌ AI failed to read **{file.name}**. It did not return valid data.")
-                                with st.expander("See what the AI actually said"):
-                                    st.text(raw_json)
                                 continue
 
                             if isinstance(ai_data, list) and len(ai_data) > 0:
