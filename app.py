@@ -532,8 +532,11 @@ elif auth_status == True:
             for col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='ignore')
                 if df[col].dtype == 'object':
-                    df[col] = df[col].astype(str).str.strip().str.title()
-                    df[col] = df[col].replace({'N/A': 'N/A', 'N/a': 'N/A', 'Nan': 'N/A', 'None': 'N/A', '': 'N/A'})
+                    # CHANGED: .str.upper() forces EVERYTHING to be ALL CAPS
+                    df[col] = df[col].astype(str).str.strip().str.upper()
+                    
+                    # CHANGED: Updated the vacuum to catch the newly capitalized blank words
+                    df[col] = df[col].replace({'N/A': 'N/A', 'NAN': 'N/A', 'NONE': 'N/A', '': 'N/A'})
             
             all_columns = df.columns.tolist()
             col1, col2 = st.columns(2)
