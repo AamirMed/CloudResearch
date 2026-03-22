@@ -23,644 +23,684 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ============================================================
-# CLOUDRESEARCH — PRECISION DARK UI SYSTEM
-# Typography: IBM Plex Sans (body) + Syne (display)
-# Palette: Deep navy base, electric teal accent, slate surfaces
+# ENTERPRISE SaaS UI — FULL DARK THEME OVERRIDE
 # ============================================================
 st.markdown("""
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;600;700;800&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
-
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=JetBrains+Mono:wght@400;500&display=swap');
 
-/* ── ROOT VARIABLES ───────────────────────────────────────── */
-:root {
-    --bg:          #07090F;
-    --surface:     #0D1119;
-    --panel:       #111620;
-    --border:      #1E2535;
-    --border-lit:  #2A3550;
-    --accent:      #00D4AA;
-    --accent-dim:  rgba(0, 212, 170, 0.12);
-    --accent-glow: rgba(0, 212, 170, 0.25);
-    --red:         #FF4B6E;
-    --amber:       #FFB547;
-    --blue:        #4B9FFF;
-    --text-hi:     #EDF0F7;
-    --text-md:     #8B95AE;
-    --text-lo:     #4A5468;
-    --font-sans:   'IBM Plex Sans', sans-serif;
-    --font-display:'Syne', sans-serif;
-    --font-mono:   'IBM Plex Mono', monospace;
-    --radius:      6px;
-    --radius-lg:   10px;
+/* ─── GLOBAL RESET ─── */
+*, *::before, *::after { box-sizing: border-box; }
+
+html, body, .stApp {
+    font-family: 'Instrument Sans', sans-serif !important;
+    background-color: #080C14 !important;
+    color: #C8D6F0 !important;
 }
 
-/* ── GLOBAL RESET ─────────────────────────────────────────── */
-html, body, [class*="css"] {
-    font-family: var(--font-sans) !important;
-    background-color: var(--bg) !important;
-    color: var(--text-hi) !important;
-}
-
-.stApp {
-    background-color: var(--bg) !important;
-}
-
-/* hide streamlit chrome */
-#MainMenu, footer, header { visibility: hidden; }
-.stDeployButton { display: none; }
-
-/* ── ANIMATED TOP STRIPE ──────────────────────────────────── */
+/* ─── BACKGROUND GRID TEXTURE ─── */
 .stApp::before {
     content: '';
     position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 2px;
-    background: linear-gradient(90deg, transparent, var(--accent), #4B9FFF, var(--accent), transparent);
-    background-size: 300% 100%;
-    animation: stripe 4s linear infinite;
-    z-index: 9999;
-}
-@keyframes stripe {
-    0%   { background-position: 100% 0; }
-    100% { background-position: -100% 0; }
+    inset: 0;
+    background-image:
+        linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+    z-index: 0;
 }
 
-/* ── SIDEBAR ──────────────────────────────────────────────── */
+/* ─── MAIN CONTENT AREA ─── */
+.main .block-container {
+    padding: 2rem 2.5rem 4rem 2.5rem !important;
+    max-width: 1400px !important;
+    position: relative;
+    z-index: 1;
+}
+
+/* ─── SIDEBAR ─── */
 [data-testid="stSidebar"] {
-    background-color: var(--surface) !important;
-    border-right: 1px solid var(--border) !important;
-    padding-top: 0 !important;
+    background: #0C111D !important;
+    border-right: 1px solid #1A2540 !important;
 }
 
-[data-testid="stSidebar"] > div:first-child {
-    padding-top: 1.5rem;
+[data-testid="stSidebar"] > div {
+    padding: 1.5rem 1.25rem !important;
 }
 
-/* Sidebar logo header area */
-[data-testid="stSidebar"] .stMarkdown h1 {
-    font-family: var(--font-display) !important;
-    color: var(--accent) !important;
-    font-size: 1.1rem !important;
-    letter-spacing: 0.12em !important;
-    text-transform: uppercase !important;
-    font-weight: 800 !important;
-    margin: 0 !important;
+[data-testid="stSidebar"] .stMarkdown p,
+[data-testid="stSidebar"] .stCaption,
+[data-testid="stSidebar"] label {
+    color: #7A90B8 !important;
+    font-size: 0.8rem !important;
 }
 
-/* Sidebar headers */
+/* ─── SIDEBAR SECTION HEADERS ─── */
 [data-testid="stSidebar"] h1,
 [data-testid="stSidebar"] h2,
 [data-testid="stSidebar"] h3 {
-    font-family: var(--font-display) !important;
-    color: var(--text-md) !important;
+    font-family: 'Instrument Sans', sans-serif !important;
     font-size: 0.65rem !important;
     font-weight: 600 !important;
-    letter-spacing: 0.15em !important;
+    letter-spacing: 0.12em !important;
     text-transform: uppercase !important;
-    margin-top: 1.5rem !important;
-    margin-bottom: 0.6rem !important;
-    padding-bottom: 0.4rem !important;
-    border-bottom: 1px solid var(--border) !important;
+    color: #3B82F6 !important;
+    margin: 0.25rem 0 0.75rem 0 !important;
+    padding: 0 !important;
 }
 
-/* ── MAIN HEADINGS ────────────────────────────────────────── */
+/* ─── MAIN PAGE TITLE ─── */
 .stApp h1 {
-    font-family: var(--font-display) !important;
-    font-size: 1.6rem !important;
-    font-weight: 800 !important;
-    color: var(--text-hi) !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 1.35rem !important;
+    font-weight: 700 !important;
+    color: #E8EDF8 !important;
     letter-spacing: -0.02em !important;
+    padding-bottom: 0 !important;
     margin-bottom: 0 !important;
-    line-height: 1.2 !important;
 }
 
 .stApp h2 {
-    font-family: var(--font-display) !important;
-    font-size: 0.75rem !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.95rem !important;
     font-weight: 600 !important;
-    color: var(--text-md) !important;
-    letter-spacing: 0.14em !important;
-    text-transform: uppercase !important;
-    margin-bottom: 1rem !important;
-    margin-top: 0.5rem !important;
+    color: #B8C8E8 !important;
+    letter-spacing: -0.01em !important;
+    padding-top: 0.5rem !important;
 }
 
 .stApp h3 {
-    font-family: var(--font-display) !important;
-    font-size: 0.9rem !important;
-    font-weight: 700 !important;
-    color: var(--text-hi) !important;
-    margin-bottom: 0.5rem !important;
-}
-
-/* ── TABS ─────────────────────────────────────────────────── */
-[data-testid="stTabs"] {
-    border-bottom: 1px solid var(--border) !important;
-    margin-bottom: 1.5rem !important;
-}
-
-button[data-baseweb="tab"] {
-    font-family: var(--font-sans) !important;
-    font-size: 0.8rem !important;
-    font-weight: 500 !important;
-    color: var(--text-md) !important;
-    background: transparent !important;
-    border: none !important;
-    padding: 0.7rem 1.2rem !important;
-    letter-spacing: 0.03em !important;
-    transition: color 0.2s !important;
-}
-
-button[data-baseweb="tab"]:hover {
-    color: var(--text-hi) !important;
-}
-
-button[data-baseweb="tab"][aria-selected="true"] {
-    color: var(--accent) !important;
-    background: transparent !important;
-    border-bottom: 2px solid var(--accent) !important;
-}
-
-[data-baseweb="tab-highlight"] {
-    background-color: var(--accent) !important;
-}
-
-[data-baseweb="tab-border"] {
-    background-color: var(--border) !important;
-}
-
-/* ── INPUTS & TEXT AREAS ──────────────────────────────────── */
-[data-testid="stTextInput"] input,
-[data-testid="stTextArea"] textarea,
-[data-baseweb="select"] > div:first-child {
-    background-color: var(--panel) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
-    color: var(--text-hi) !important;
-    font-family: var(--font-sans) !important;
+    font-family: 'Instrument Sans', sans-serif !important;
     font-size: 0.85rem !important;
-    transition: border-color 0.2s !important;
+    font-weight: 600 !important;
+    color: #8A9DC0 !important;
 }
 
-[data-testid="stTextInput"] input:focus,
-[data-testid="stTextArea"] textarea:focus {
-    border-color: var(--accent) !important;
-    box-shadow: 0 0 0 2px var(--accent-dim) !important;
+/* ─── INPUTS ─── */
+.stTextInput input,
+.stTextArea textarea,
+.stSelectbox select {
+    font-family: 'Instrument Sans', sans-serif !important;
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    border-radius: 6px !important;
+    color: #C8D6F0 !important;
+    font-size: 0.85rem !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.stTextInput input:focus,
+.stTextArea textarea:focus {
+    border-color: #3B82F6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12) !important;
     outline: none !important;
 }
 
-[data-testid="stTextInput"] label,
-[data-testid="stTextArea"] label,
-[data-testid="stSelectbox"] label {
-    font-family: var(--font-sans) !important;
-    font-size: 0.75rem !important;
-    font-weight: 500 !important;
-    color: var(--text-md) !important;
-    letter-spacing: 0.03em !important;
-    margin-bottom: 0.3rem !important;
+.stTextInput input::placeholder,
+.stTextArea textarea::placeholder {
+    color: #3A4D6A !important;
 }
 
-/* ── SELECTBOX ────────────────────────────────────────────── */
-[data-baseweb="select"] * {
-    background-color: var(--panel) !important;
-    color: var(--text-hi) !important;
-    font-family: var(--font-sans) !important;
+/* Input labels */
+.stTextInput label,
+.stTextArea label,
+.stSelectbox label,
+.stFileUploader label,
+.stRadio label span {
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.78rem !important;
+    font-weight: 500 !important;
+    color: #7A90B8 !important;
+    letter-spacing: 0.01em !important;
+}
+
+/* ─── SELECTBOX ─── */
+[data-baseweb="select"] > div {
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    border-radius: 6px !important;
+    color: #C8D6F0 !important;
     font-size: 0.85rem !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+}
+
+[data-baseweb="select"] > div:hover {
+    border-color: #2D4A7A !important;
 }
 
 [data-baseweb="popover"] {
-    background-color: var(--panel) !important;
-    border: 1px solid var(--border-lit) !important;
-    border-radius: var(--radius) !important;
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    border-radius: 8px !important;
 }
 
-[data-baseweb="menu"] li {
+[data-baseweb="menu"] {
+    background: #0F1624 !important;
+}
+
+[data-baseweb="option"] {
+    background: #0F1624 !important;
+    color: #C8D6F0 !important;
     font-size: 0.85rem !important;
+    font-family: 'Instrument Sans', sans-serif !important;
 }
 
-[data-baseweb="menu"] li:hover {
-    background-color: var(--accent-dim) !important;
+[data-baseweb="option"]:hover {
+    background: #1A2540 !important;
 }
 
-/* ── BUTTONS ──────────────────────────────────────────────── */
-[data-testid="stButton"] button {
-    background-color: var(--panel) !important;
-    color: var(--text-hi) !important;
-    border: 1px solid var(--border-lit) !important;
-    border-radius: var(--radius) !important;
-    font-family: var(--font-sans) !important;
-    font-size: 0.8rem !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.03em !important;
-    padding: 0.45rem 1rem !important;
-    transition: all 0.18s ease !important;
-    cursor: pointer !important;
-}
-
-[data-testid="stButton"] button:hover {
-    background-color: var(--border-lit) !important;
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    transform: translateY(-1px) !important;
-    box-shadow: 0 4px 12px rgba(0,0,0,0.3) !important;
+/* ─── BUTTONS ─── */
+.stButton button {
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+    transition: all 0.2s ease !important;
+    letter-spacing: 0.01em !important;
 }
 
 /* Primary button */
-[data-testid="stButton"] button[kind="primary"] {
-    background: linear-gradient(135deg, #00C49A, #00A882) !important;
-    color: #001F19 !important;
-    border: none !important;
-    font-weight: 600 !important;
-    letter-spacing: 0.05em !important;
+.stButton button[kind="primary"],
+.stButton button[data-testid="baseButton-primary"] {
+    background: #2563EB !important;
+    border: 1px solid #3B82F6 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.2), inset 0 1px 0 rgba(255,255,255,0.1) !important;
 }
 
-[data-testid="stButton"] button[kind="primary"]:hover {
-    background: linear-gradient(135deg, #00D4AA, #00B990) !important;
-    color: #001F19 !important;
-    box-shadow: 0 4px 20px var(--accent-glow) !important;
+.stButton button[kind="primary"]:hover,
+.stButton button[data-testid="baseButton-primary"]:hover {
+    background: #1D4ED8 !important;
+    box-shadow: 0 0 30px rgba(59, 130, 246, 0.35), inset 0 1px 0 rgba(255,255,255,0.15) !important;
     transform: translateY(-1px) !important;
 }
 
-/* Form submit button */
-[data-testid="stFormSubmitButton"] button {
-    background: linear-gradient(135deg, #00C49A, #00A882) !important;
-    color: #001F19 !important;
-    border: none !important;
-    font-family: var(--font-sans) !important;
+/* Secondary button */
+.stButton button[kind="secondary"],
+.stButton button[data-testid="baseButton-secondary"] {
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    color: #8BA5D0 !important;
+}
+
+.stButton button[kind="secondary"]:hover,
+.stButton button[data-testid="baseButton-secondary"]:hover {
+    background: #141B2D !important;
+    border-color: #2D4A7A !important;
+    color: #C8D6F0 !important;
+    transform: translateY(-1px) !important;
+}
+
+/* ─── FORM SUBMIT BUTTON ─── */
+.stFormSubmitButton button {
+    font-family: 'Instrument Sans', sans-serif !important;
     font-size: 0.82rem !important;
     font-weight: 600 !important;
-    letter-spacing: 0.06em !important;
-    border-radius: var(--radius) !important;
-    padding: 0.5rem 1.2rem !important;
-    text-transform: uppercase !important;
-    transition: all 0.18s ease !important;
+    border-radius: 6px !important;
+    letter-spacing: 0.01em !important;
+    background: #2563EB !important;
+    border: 1px solid #3B82F6 !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 0 20px rgba(59, 130, 246, 0.2) !important;
+    transition: all 0.2s ease !important;
 }
 
-[data-testid="stFormSubmitButton"] button:hover {
-    background: linear-gradient(135deg, #00D4AA, #00B990) !important;
-    box-shadow: 0 4px 20px var(--accent-glow) !important;
+.stFormSubmitButton button:hover {
+    background: #1D4ED8 !important;
+    box-shadow: 0 0 30px rgba(59, 130, 246, 0.35) !important;
     transform: translateY(-1px) !important;
 }
 
-/* Download button */
-[data-testid="stDownloadButton"] button {
-    background-color: transparent !important;
-    color: var(--text-md) !important;
-    border: 1px solid var(--border) !important;
-    font-family: var(--font-sans) !important;
-    font-size: 0.8rem !important;
-    border-radius: var(--radius) !important;
-    transition: all 0.18s !important;
+/* ─── DOWNLOAD BUTTON ─── */
+.stDownloadButton button {
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    border-radius: 6px !important;
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    color: #8BA5D0 !important;
+    transition: all 0.2s ease !important;
 }
 
-[data-testid="stDownloadButton"] button:hover {
-    border-color: var(--blue) !important;
-    color: var(--blue) !important;
+.stDownloadButton button:hover {
+    background: #141B2D !important;
+    border-color: #2D4A7A !important;
+    color: #C8D6F0 !important;
 }
 
-/* ── RADIO BUTTONS ────────────────────────────────────────── */
+/* ─── TABS ─── */
+[data-baseweb="tab-list"] {
+    background: transparent !important;
+    border-bottom: 1px solid #1A2540 !important;
+    gap: 0 !important;
+    padding: 0 !important;
+}
+
+[data-baseweb="tab"] {
+    background: transparent !important;
+    border: none !important;
+    border-bottom: 2px solid transparent !important;
+    color: #5A7099 !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 500 !important;
+    padding: 0.65rem 1.25rem !important;
+    margin-bottom: -1px !important;
+    transition: all 0.2s ease !important;
+    letter-spacing: 0.01em !important;
+}
+
+[data-baseweb="tab"]:hover {
+    color: #A0B8D8 !important;
+    background: rgba(59, 130, 246, 0.05) !important;
+}
+
+[aria-selected="true"][data-baseweb="tab"] {
+    color: #3B82F6 !important;
+    border-bottom: 2px solid #3B82F6 !important;
+    background: transparent !important;
+    font-weight: 600 !important;
+}
+
+[data-baseweb="tab-panel"] {
+    padding: 1.5rem 0 0 0 !important;
+    background: transparent !important;
+}
+
+/* ─── RADIO BUTTONS ─── */
+[data-testid="stRadio"] > div {
+    gap: 0.5rem !important;
+    flex-direction: row !important;
+    flex-wrap: wrap !important;
+}
+
 [data-testid="stRadio"] label {
-    font-family: var(--font-sans) !important;
-    font-size: 0.82rem !important;
-    color: var(--text-md) !important;
+    background: #0F1624 !important;
+    border: 1px solid #1E2D4A !important;
+    border-radius: 6px !important;
+    padding: 0.4rem 0.85rem !important;
+    cursor: pointer !important;
+    transition: all 0.2s ease !important;
+    font-size: 0.8rem !important;
+    font-weight: 500 !important;
+    color: #7A90B8 !important;
 }
 
-[data-testid="stRadio"] [data-testid="stMarkdown"] p {
-    font-size: 0.82rem !important;
+[data-testid="stRadio"] label:has(input:checked) {
+    background: rgba(59, 130, 246, 0.1) !important;
+    border-color: #3B82F6 !important;
+    color: #3B82F6 !important;
 }
 
-/* Radio option container */
-[data-testid="stRadio"] > div > div {
-    background: var(--panel) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
-    padding: 0.4rem 0.8rem !important;
-    transition: all 0.18s !important;
+[data-testid="stRadio"] label input {
+    display: none !important;
 }
 
-[data-testid="stRadio"] > div > div:has(input:checked) {
-    border-color: var(--accent) !important;
-    background: var(--accent-dim) !important;
+/* ─── FILE UPLOADER ─── */
+[data-testid="stFileUploader"] {
+    border: 1px dashed #1E2D4A !important;
+    border-radius: 8px !important;
+    background: #0A0E1A !important;
+    transition: border-color 0.2s ease !important;
 }
 
-/* ── ALERT BOXES ──────────────────────────────────────────── */
+[data-testid="stFileUploader"]:hover {
+    border-color: #2D4A7A !important;
+}
+
+[data-testid="stFileUploader"] section {
+    background: transparent !important;
+}
+
+[data-testid="stFileUploader"] button {
+    background: #141B2D !important;
+    border: 1px solid #1E2D4A !important;
+    color: #8BA5D0 !important;
+    font-size: 0.8rem !important;
+    border-radius: 5px !important;
+}
+
+/* ─── ALERTS / MESSAGES ─── */
 [data-testid="stAlert"] {
-    border-radius: var(--radius) !important;
+    border-radius: 6px !important;
     border-left-width: 3px !important;
-    font-family: var(--font-sans) !important;
     font-size: 0.82rem !important;
-    padding: 0.7rem 1rem !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+    padding: 0.65rem 1rem !important;
 }
 
 /* Info */
-div[data-testid="stAlert"][class*="info"] {
-    background-color: rgba(75,159,255,0.08) !important;
-    border-color: var(--blue) !important;
-    color: #A0C4FF !important;
+[data-testid="stAlert"][data-baseweb="notification"][kind="info"],
+div[data-testid="stInfo"] {
+    background: rgba(59, 130, 246, 0.06) !important;
+    border-color: #2563EB !important;
+    color: #93B4E0 !important;
 }
 
 /* Success */
-div[data-testid="stAlert"][class*="success"] {
-    background-color: rgba(0,212,170,0.08) !important;
-    border-color: var(--accent) !important;
-    color: #80EDD9 !important;
-}
-
-/* Warning */
-div[data-testid="stAlert"][class*="warning"] {
-    background-color: rgba(255,181,71,0.08) !important;
-    border-color: var(--amber) !important;
-    color: #FFD59F !important;
+div[data-testid="stSuccess"] {
+    background: rgba(16, 185, 129, 0.06) !important;
+    border-color: #059669 !important;
+    color: #6EE7B7 !important;
 }
 
 /* Error */
-div[data-testid="stAlert"][class*="error"] {
-    background-color: rgba(255,75,110,0.08) !important;
-    border-color: var(--red) !important;
-    color: #FF9EB4 !important;
+div[data-testid="stError"] {
+    background: rgba(239, 68, 68, 0.06) !important;
+    border-color: #DC2626 !important;
+    color: #FCA5A5 !important;
 }
 
-/* ── EXPANDER ─────────────────────────────────────────────── */
+/* Warning */
+div[data-testid="stWarning"] {
+    background: rgba(245, 158, 11, 0.06) !important;
+    border-color: #D97706 !important;
+    color: #FCD34D !important;
+}
+
+/* ─── EXPANDER ─── */
 [data-testid="stExpander"] {
-    background-color: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius) !important;
+    border: 1px solid #1A2540 !important;
+    border-radius: 6px !important;
+    background: #0C111D !important;
     overflow: hidden !important;
 }
 
 [data-testid="stExpander"] summary {
-    font-family: var(--font-sans) !important;
-    font-size: 0.8rem !important;
-    font-weight: 500 !important;
-    color: var(--text-md) !important;
-    padding: 0.6rem 0.8rem !important;
-    letter-spacing: 0.03em !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+    font-size: 0.82rem !important;
+    font-weight: 600 !important;
+    color: #8BA5D0 !important;
+    padding: 0.65rem 1rem !important;
+    background: #0C111D !important;
+    letter-spacing: 0.01em !important;
 }
 
 [data-testid="stExpander"] summary:hover {
-    color: var(--text-hi) !important;
-    background: var(--panel) !important;
+    color: #C8D6F0 !important;
+    background: #0F1624 !important;
 }
 
-[data-testid="stExpander"] summary svg {
-    fill: var(--text-lo) !important;
+[data-testid="stExpander"] > div > div {
+    padding: 0.75rem 1rem 1rem 1rem !important;
+    background: #080C14 !important;
+    border-top: 1px solid #1A2540 !important;
 }
 
-/* ── FILE UPLOADER ────────────────────────────────────────── */
-[data-testid="stFileUploader"] {
-    background-color: var(--surface) !important;
-    border: 1.5px dashed var(--border-lit) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 1.5rem !important;
-    transition: border-color 0.2s !important;
-}
-
-[data-testid="stFileUploader"]:hover {
-    border-color: var(--accent) !important;
-}
-
-[data-testid="stFileUploader"] label {
-    font-family: var(--font-sans) !important;
-    font-size: 0.82rem !important;
-    color: var(--text-md) !important;
-}
-
-[data-testid="stFileUploader"] button {
-    font-size: 0.78rem !important;
-}
-
-/* ── DATA EDITOR / TABLE ──────────────────────────────────── */
-[data-testid="stDataEditor"],
-[data-testid="stDataFrame"] {
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
+/* ─── DATA EDITOR / TABLE ─── */
+[data-testid="stDataFrame"],
+[data-testid="stDataEditor"] {
+    border: 1px solid #1A2540 !important;
+    border-radius: 8px !important;
     overflow: hidden !important;
 }
 
-.glideDataEditor {
-    background: var(--surface) !important;
-    font-family: var(--font-mono) !important;
-    font-size: 0.78rem !important;
+.dvn-scroller {
+    background: #0A0E1A !important;
 }
 
-/* ── SPINNER ──────────────────────────────────────────────── */
-[data-testid="stSpinner"] {
-    font-family: var(--font-sans) !important;
-    font-size: 0.82rem !important;
-    color: var(--text-md) !important;
-}
-
-[data-testid="stSpinner"] svg {
-    color: var(--accent) !important;
-}
-
-/* ── TOAST ────────────────────────────────────────────────── */
-[data-testid="stToast"] {
-    background-color: var(--panel) !important;
-    border: 1px solid var(--border-lit) !important;
-    border-radius: var(--radius) !important;
-    font-family: var(--font-sans) !important;
-    font-size: 0.82rem !important;
-    color: var(--text-hi) !important;
-    box-shadow: 0 8px 24px rgba(0,0,0,0.4) !important;
-}
-
-/* ── DIVIDER ──────────────────────────────────────────────── */
+/* ─── DIVIDER ─── */
 hr {
     border: none !important;
-    border-top: 1px solid var(--border) !important;
+    border-top: 1px solid #141D30 !important;
     margin: 1.5rem 0 !important;
 }
 
-/* ── CAPTION & SMALL TEXT ─────────────────────────────────── */
-[data-testid="stCaptionContainer"] {
-    font-family: var(--font-sans) !important;
-    font-size: 0.72rem !important;
-    color: var(--text-lo) !important;
-    letter-spacing: 0.02em !important;
+/* ─── SPINNER ─── */
+[data-testid="stSpinner"] {
+    color: #3B82F6 !important;
 }
 
-/* ── SIDEBAR SESSION STATUS ───────────────────────────────── */
-[data-testid="stSidebar"] .stSuccess {
-    background: var(--accent-dim) !important;
-    border-color: var(--accent) !important;
-    color: var(--accent) !important;
-    border-radius: var(--radius) !important;
-    font-size: 0.78rem !important;
-    font-weight: 500 !important;
-    letter-spacing: 0.03em !important;
-    padding: 0.5rem 0.8rem !important;
-}
-
-/* ── FORM CONTAINER ───────────────────────────────────────── */
-[data-testid="stForm"] {
-    background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 1.2rem !important;
-}
-
-/* ── SCROLLBAR ────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: var(--bg); }
-::-webkit-scrollbar-thumb { background: var(--border-lit); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: var(--text-lo); }
-
-/* ── METRIC CARDS ─────────────────────────────────────────── */
-[data-testid="stMetric"] {
-    background: var(--surface) !important;
-    border: 1px solid var(--border) !important;
-    border-radius: var(--radius-lg) !important;
-    padding: 1rem 1.2rem !important;
-}
-
-[data-testid="stMetricLabel"] {
-    font-size: 0.7rem !important;
-    letter-spacing: 0.1em !important;
-    text-transform: uppercase !important;
-    color: var(--text-lo) !important;
-    font-weight: 600 !important;
-}
-
-[data-testid="stMetricValue"] {
-    font-family: var(--font-display) !important;
-    font-size: 1.6rem !important;
-    font-weight: 700 !important;
-    color: var(--text-hi) !important;
-}
-
-/* ── CHECKBOX ─────────────────────────────────────────────── */
-[data-testid="stCheckbox"] label {
+/* ─── TOAST ─── */
+[data-testid="stToast"] {
+    background: #141B2D !important;
+    border: 1px solid #1E2D4A !important;
+    color: #C8D6F0 !important;
+    border-radius: 8px !important;
     font-size: 0.82rem !important;
-    color: var(--text-md) !important;
-    font-family: var(--font-sans) !important;
+    font-family: 'Instrument Sans', sans-serif !important;
 }
 
-/* ── PLOTLY CHARTS ────────────────────────────────────────── */
-.js-plotly-plot .plotly {
+/* ─── FORM CONTAINER ─── */
+[data-testid="stForm"] {
+    background: #0C111D !important;
+    border: 1px solid #1A2540 !important;
+    border-radius: 8px !important;
+    padding: 1.25rem !important;
+}
+
+/* ─── CAPTION / SMALL TEXT ─── */
+.stCaption, [data-testid="stCaption"] {
+    font-size: 0.75rem !important;
+    color: #4A6080 !important;
+    font-family: 'Instrument Sans', sans-serif !important;
+}
+
+/* ─── SUCCESS / LOGOUT BUTTON in sidebar ─── */
+[data-testid="stSidebar"] .stButton button {
+    font-size: 0.78rem !important;
+}
+
+/* ─── SCROLLBAR ─── */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: #080C14; }
+::-webkit-scrollbar-thumb { background: #1E2D4A; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #2D4A7A; }
+
+/* ─── PLOTLY CHARTS ─── */
+.js-plotly-plot .plotly .modebar {
     background: transparent !important;
 }
 
-/* ── CUSTOM SECTION LABEL ─────────────────────────────────── */
-.section-label {
-    font-family: var(--font-sans);
-    font-size: 0.68rem;
-    font-weight: 600;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--text-lo);
-    margin-bottom: 0.75rem;
-    margin-top: 0.5rem;
+/* ─── SYSTEM ID BADGE STYLE via caption ─── */
+code {
+    font-family: 'JetBrains Mono', monospace !important;
+    font-size: 0.78rem !important;
+    background: #141B2D !important;
+    border: 1px solid #1E2D4A !important;
+    color: #3B82F6 !important;
+    padding: 0.1em 0.4em !important;
+    border-radius: 4px !important;
 }
 
-/* ── COLUMN LAYOUT TWEAKS ─────────────────────────────────── */
-[data-testid="column"] {
-    padding: 0 0.4rem !important;
-}
-
-/* ── MAIN CONTENT PADDING ─────────────────────────────────── */
-.block-container {
-    padding: 2rem 2.5rem 3rem !important;
-    max-width: 1400px !important;
-}
-
-/* ── TITLE BADGE ──────────────────────────────────────────── */
-.cr-title-row {
-    display: flex;
-    align-items: center;
-    gap: 0.8rem;
-    margin-bottom: 0.2rem;
-}
-
-.cr-badge {
-    display: inline-block;
-    background: var(--accent-dim);
-    border: 1px solid var(--accent);
-    color: var(--accent);
-    font-family: var(--font-mono);
-    font-size: 0.6rem;
-    font-weight: 500;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    padding: 0.18rem 0.5rem;
-    border-radius: 3px;
-    vertical-align: middle;
-    margin-left: 0.4rem;
-}
-
-/* ── ID PILL STYLE ────────────────────────────────────────── */
-.id-pill {
-    font-family: var(--font-mono);
-    font-size: 0.78rem;
-    background: var(--accent-dim);
-    color: var(--accent);
-    padding: 0.15rem 0.5rem;
-    border-radius: 3px;
-    border: 1px solid rgba(0,212,170,0.2);
-    letter-spacing: 0.05em;
-}
-
-/* ── STATUS DOT ───────────────────────────────────────────── */
-.status-dot {
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--accent);
-    display: inline-block;
-    margin-right: 0.4rem;
-    box-shadow: 0 0 6px var(--accent);
-    animation: pulse 2s ease-in-out infinite;
-}
-@keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.4; }
-}
-
-/* ── SIDEBAR LOGO MARK ────────────────────────────────────── */
-.sidebar-logo {
+/* ─── SIDEBAR LOGO / BRAND HEADER ─── */
+.brand-header {
     display: flex;
     align-items: center;
     gap: 0.6rem;
-    padding: 0.4rem 0 1rem;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 0.5rem;
+    margin-bottom: 0.25rem;
 }
 
-.sidebar-hexmark {
-    width: 28px; height: 28px;
-    background: var(--accent-dim);
-    border: 1.5px solid var(--accent);
+.brand-logo {
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg, #2563EB, #3B82F6);
     border-radius: 6px;
     display: flex;
     align-items: center;
     justify-content: center;
     font-size: 0.85rem;
-    color: var(--accent);
-    font-weight: 700;
-    font-family: var(--font-mono);
-    flex-shrink: 0;
+    box-shadow: 0 0 12px rgba(59, 130, 246, 0.3);
 }
 
-.sidebar-wordmark {
-    font-family: var(--font-display);
+.brand-name {
+    font-family: 'Instrument Sans', sans-serif;
     font-size: 0.9rem;
-    font-weight: 800;
-    color: var(--text-hi);
-    letter-spacing: 0.04em;
-    line-height: 1;
+    font-weight: 700;
+    color: #E8EDF8;
+    letter-spacing: -0.02em;
 }
 
-.sidebar-wordmark span {
-    color: var(--accent);
+.brand-tag {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.62rem;
+    color: #3B82F6;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
 }
 
-.sidebar-version {
-    font-family: var(--font-mono);
-    font-size: 0.6rem;
-    color: var(--text-lo);
-    letter-spacing: 0.1em;
-    margin-top: 1px;
+/* ─── PAGE TITLE BLOCK ─── */
+.page-title-block {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 1.25rem;
+    border-bottom: 1px solid #141D30;
+    margin-bottom: 1.5rem;
+}
+
+.page-title-left {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.page-title-icon {
+    width: 36px;
+    height: 36px;
+    background: rgba(59, 130, 246, 0.1);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+}
+
+.page-title-text {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #E8EDF8;
+    letter-spacing: -0.02em;
+}
+
+.page-title-sub {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 0.75rem;
+    color: #4A6080;
+    margin-top: 0.1rem;
+}
+
+.status-dot {
+    display: inline-block;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: #10B981;
+    box-shadow: 0 0 6px rgba(16, 185, 129, 0.6);
+    margin-right: 0.4rem;
+    animation: pulse-dot 2s ease-in-out infinite;
+}
+
+@keyframes pulse-dot {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+}
+
+.status-badge {
+    display: flex;
+    align-items: center;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.7rem;
+    color: #10B981;
+    background: rgba(16, 185, 129, 0.08);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    padding: 0.3rem 0.7rem;
+    border-radius: 20px;
+}
+
+/* ─── METRIC CARDS ─── */
+.metric-row {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 0.75rem;
+    margin-bottom: 1.5rem;
+}
+
+.metric-card {
+    background: #0C111D;
+    border: 1px solid #1A2540;
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    transition: border-color 0.2s ease;
+}
+
+.metric-card:hover {
+    border-color: #2D4A7A;
+}
+
+.metric-label {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #4A6080;
+    margin-bottom: 0.4rem;
+}
+
+.metric-value {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 1.6rem;
+    font-weight: 500;
+    color: #E8EDF8;
+    letter-spacing: -0.02em;
+}
+
+.metric-sub {
+    font-size: 0.7rem;
+    color: #4A6080;
+    margin-top: 0.2rem;
+}
+
+/* ─── SECTION DIVIDER WITH LABEL ─── */
+.section-label {
+    font-family: 'Instrument Sans', sans-serif;
+    font-size: 0.65rem;
+    font-weight: 600;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #3A4D6A;
+    margin: 1.5rem 0 1rem 0;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.section-label::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: #141D30;
+}
+
+/* ─── PROCESSING MODE LABEL ─── */
+.mode-info {
+    display: flex;
+    align-items: flex-start;
+    gap: 0.6rem;
+    background: rgba(59, 130, 246, 0.05);
+    border: 1px solid rgba(59, 130, 246, 0.12);
+    border-radius: 6px;
+    padding: 0.65rem 0.85rem;
+    margin-bottom: 1rem;
+    font-size: 0.8rem;
+    color: #7A9CC8;
+    font-family: 'Instrument Sans', sans-serif;
+}
+
+.mode-icon {
+    color: #3B82F6;
+    font-size: 0.9rem;
+    margin-top: 0.05rem;
+    flex-shrink: 0;
 }
 
 </style>
@@ -722,7 +762,7 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
         return cloud_df
 
     elif mode == "push":
-        # Read backup before clearing
+        # Read backup before clearing (safety net)
         backup = sheet.get_all_values()
         try:
             sheet.clear()
@@ -764,7 +804,7 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
     extra_text = extra_rules.strip() if extra_rules.strip() else "None"
     anti_text = anti_rules.strip() if anti_rules.strip() else "- Do not hallucinate values\n- Do not guess missing data"
     
-    return f"""ROLE:
+    final_prompt = f"""ROLE:
 You are an expert clinical data extraction system.
 
 USER INSTRUCTION:
@@ -786,6 +826,7 @@ Return ONLY valid JSON format.
 No explanations, markdown formatting, or conversational text.
 Use "N/A" if missing.
 """
+    return final_prompt
 
 def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     full_prompt = f"{final_prompt}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If you cannot read the image, output an empty array []."
@@ -838,8 +879,8 @@ try:
     )
     authenticator.login()
 except Exception as e:
-    st.error(f"Authentication system error. Please contact your administrator.")
-    st.error(f"Technical detail: {e}")
+    st.error(f"Authentication system error. Contact your administrator.")
+    st.error(f"Details: {e}")
     st.stop()
 
 
@@ -847,31 +888,21 @@ except Exception as e:
 auth_status = st.session_state.get("authentication_status")
 
 if auth_status == False:
-    st.markdown("""
-        <div style="max-width:380px; margin:6rem auto; text-align:center;">
-            <div style="font-family:'Syne',sans-serif; font-size:1.4rem; font-weight:800; color:#EDF0F7; margin-bottom:0.3rem;">
-                Cloud<span style="color:#00D4AA">Research</span>
-            </div>
-            <div style="font-size:0.72rem; color:#4A5468; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:2rem;">
-                Clinical Intelligence Platform
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    st.error("Invalid credentials. Access denied.")
+    st.error("Credentials not recognised. Please try again.")
 
 elif auth_status == None:
     st.markdown("""
-        <div style="max-width:380px; margin:5rem auto; text-align:center;">
-            <div style="font-family:'Syne',sans-serif; font-size:1.8rem; font-weight:800; color:#EDF0F7; margin-bottom:0.3rem;">
-                Cloud<span style="color:#00D4AA">Research</span>
-            </div>
-            <div style="font-size:0.7rem; color:#4A5468; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:2.5rem;">
-                Clinical Intelligence Platform
-            </div>
-            <div style="font-size:0.8rem; color:#6B7A99; line-height:1.6;">
-                Enter your credentials to access the secure command center.
-            </div>
+    <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;padding:4rem 0 2rem 0;">
+        <div style="font-family:'Instrument Sans',sans-serif;font-size:1.6rem;font-weight:700;color:#E8EDF8;letter-spacing:-0.03em;margin-bottom:0.3rem;">
+            ⬡ CloudResearch
         </div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:0.7rem;color:#3B82F6;letter-spacing:0.1em;text-transform:uppercase;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.2);padding:0.2rem 0.7rem;border-radius:3px;margin-bottom:2rem;">
+            Clinical Intelligence Platform
+        </div>
+        <div style="font-size:0.82rem;color:#4A6080;font-family:'Instrument Sans',sans-serif;">
+            Enter your credentials to access the secure workspace.
+        </div>
+    </div>
     """, unsafe_allow_html=True)
 
 elif auth_status == True:
@@ -896,60 +927,57 @@ elif auth_status == True:
                     if pulled_cols:
                         st.session_state.schema_input = ", ".join(pulled_cols)
             except Exception as e:
-                st.warning(f"Auto-sync failed on login. Pull manually before adding records. Detail: {e}")
+                st.warning(f"Auto-sync failed on login. Pull manually before adding records. ({e})")
 
-    # ── SIDEBAR ─────────────────────────────────────────────
+    # ─── SIDEBAR ───────────────────────────────────────────────
     with st.sidebar:
-
-        # Logo mark
+        # Brand header
         st.markdown(f"""
-            <div class="sidebar-logo">
-                <div class="sidebar-hexmark">⬡</div>
-                <div>
-                    <div class="sidebar-wordmark">Cloud<span>Research</span></div>
-                    <div class="sidebar-version">v2.0 · CLINICAL</div>
-                </div>
+        <div class="brand-header">
+            <div class="brand-logo">⬡</div>
+            <div>
+                <div class="brand-name">CloudResearch</div>
             </div>
+        </div>
+        <div style="margin-bottom:0.25rem;">
+            <span class="brand-tag">v2.0</span>
+        </div>
         """, unsafe_allow_html=True)
 
-        # Session status
+        # Session info
         st.markdown(f"""
-            <div style="background:rgba(0,212,170,0.07); border:1px solid rgba(0,212,170,0.2); border-radius:6px; 
-                        padding:0.5rem 0.75rem; margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;">
-                <span class="status-dot"></span>
-                <span style="font-family:'IBM Plex Sans',sans-serif; font-size:0.75rem; color:#80EDD9; font-weight:500;">
-                    {name}
-                </span>
+        <div style="display:flex;align-items:center;justify-content:space-between;background:#0F1624;border:1px solid #1A2540;border-radius:6px;padding:0.6rem 0.8rem;margin:0.75rem 0 0.25rem 0;">
+            <div>
+                <div style="font-size:0.62rem;color:#3A4D6A;font-family:'Instrument Sans',sans-serif;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:0.15rem;">Active Session</div>
+                <div style="font-size:0.82rem;color:#C8D6F0;font-family:'Instrument Sans',sans-serif;font-weight:600;">{name}</div>
             </div>
+            <div><span class="status-dot"></span></div>
+        </div>
         """, unsafe_allow_html=True)
 
         authenticator.logout("Sign Out", "sidebar")
-        st.divider()
+        st.markdown('<div class="section-label">Processing Engine</div>', unsafe_allow_html=True)
 
-        st.header("Processing Engine")
         selected_model = st.selectbox(
-            "Model Selection:",
+            "Active Model",
             ["Google Gemini", "Groq (Llama 4 Vision)"],
-            help="Gemini: Deep reasoning for complex documents. Groq: High-speed for structured rosters."
+            help="Gemini: Deep reasoning for complex documents. Groq: High-speed for structured reports."
         )
 
-        st.divider()
-
-        st.header("Database Connection")
-        user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url, placeholder="https://docs.google.com/...")
-        project_tab = username
+        model_is_gemini = "Gemini" in selected_model
         st.markdown(f"""
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:0.68rem; color:#4A5468; 
-                        margin-top:0.3rem; display:flex; align-items:center; gap:0.4rem;">
-                <span style="color:#2A3550;">⬡</span> 
-                Active directory: <span style="color:#6B7A99;">{project_tab}</span>
-            </div>
+        <div style="font-family:'JetBrains Mono',monospace;font-size:0.68rem;color:{'#10B981' if model_is_gemini else '#F59E0B'};background:{'rgba(16,185,129,0.06)' if model_is_gemini else 'rgba(245,158,11,0.06)'};border:1px solid {'rgba(16,185,129,0.15)' if model_is_gemini else 'rgba(245,158,11,0.15)'};padding:0.3rem 0.6rem;border-radius:4px;margin-top:0.4rem;margin-bottom:0.5rem;">
+            {'◉ GEMINI-2.5-FLASH · DEEP REASONING' if model_is_gemini else '◉ LLAMA-4-SCOUT-17B · HIGH SPEED'}
+        </div>
         """, unsafe_allow_html=True)
 
-        st.divider()
+        st.markdown('<div class="section-label">Database Connection</div>', unsafe_allow_html=True)
+        user_sheet_url = st.text_input("Google Sheet URL", saved_sheet_url, placeholder="https://docs.google.com/...")
+        project_tab = username
+        st.caption(f"Isolated namespace → `{project_tab}`")
 
-        st.header("Target Schema")
-        st.info("System IDs are auto-generated. Do not define them here.")
+        st.markdown('<div class="section-label">Target Schema</div>', unsafe_allow_html=True)
+        st.info("System IDs are auto-generated. Do not include them in schema.", icon="ℹ️")
 
         if "safe_schema_val" not in st.session_state:
             st.session_state.safe_schema_val = st.session_state.schema_input
@@ -958,137 +986,149 @@ elif auth_status == True:
         with col_pull:
             if st.button("↓ Pull Schema", use_container_width=True):
                 if user_sheet_url and project_tab:
-                    with st.spinner("Synchronizing..."):
+                    with st.spinner("Syncing..."):
                         try:
                             sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
                             cloud_headers = sheet.row_values(1)
                             if cloud_headers:
                                 clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
                                 st.session_state.safe_schema_val = ", ".join(clean_headers)
-                                st.toast("Schema synchronized from cloud.")
+                                st.toast("Schema pulled.", icon="↓")
                                 st.rerun()
                             else:
-                                st.toast("Target sheet is empty.")
+                                st.toast("Sheet is empty.")
                         except Exception as e:
-                            st.toast(f"Sync error: {e}")
+                            st.toast(f"Error: {e}")
                 else:
-                    st.toast("Database URL required.")
+                    st.toast("Enter Sheet URL first.")
 
         with col_push:
             if st.button("↑ Push Schema", use_container_width=True):
                 if user_sheet_url and project_tab:
-                    with st.spinner("Synchronizing..."):
+                    with st.spinner("Syncing..."):
                         try:
                             sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
                             current_cols = [c.strip() for c in st.session_state.safe_schema_val.split(',') if c.strip()]
                             final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
                             sheet.update(range_name="A1", values=[final_headers])
-                            st.toast("Schema committed to cloud.")
+                            st.toast("Schema pushed.", icon="↑")
                         except Exception as e:
-                            st.toast(f"Sync error: {e}")
+                            st.toast(f"Error: {e}")
                 else:
-                    st.toast("Database URL required.")
+                    st.toast("Enter Sheet URL first.")
 
-        updated_schema = st.text_input("Schema Columns:", value=st.session_state.safe_schema_val,
-                                        placeholder="Age, Gender, Organism, Antibiotic...")
+        updated_schema = st.text_input("Schema Columns", value=st.session_state.safe_schema_val, placeholder="Age, Gender, Organism, ALT, AST...")
         st.session_state.safe_schema_val = updated_schema
         st.session_state.schema_input = updated_schema
 
-        st.divider()
-        st.header("Extraction Logic")
+        st.markdown('<div class="section-label">Extraction Logic</div>', unsafe_allow_html=True)
+
         st.session_state.user_prompt = st.text_area(
-            "Primary Directive:",
+            "Primary Directive",
             value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents."),
-            height=80
+            height=90
         )
 
-        with st.expander("Advanced Extraction Constraints"):
+        with st.expander("Advanced Constraints"):
             st.session_state.abbreviations = st.text_area(
-                "Abbreviations Map:",
+                "Abbreviation Map",
                 value=st.session_state.get("abbreviations", ""),
                 placeholder="DM → Diabetes Mellitus\nHTN → Hypertension\nS → Sensitive\nR → Resistant",
-                height=90
+                height=80
             )
             st.session_state.extra_rules = st.text_area(
-                "Inclusion Rules:",
+                "Inclusion Rules",
                 value=st.session_state.get("extra_rules", ""),
-                placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple",
-                height=80
+                placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple present",
+                height=70
             )
             st.session_state.anti_rules = st.text_area(
-                "Exclusion Rules:",
+                "Exclusion Rules",
                 value=st.session_state.get("anti_rules", ""),
                 placeholder="- Do not hallucinate values\n- Do not infer missing data",
-                height=80
+                height=70
             )
 
-        st.divider()
-        st.header("System Controls")
+        st.markdown('<div class="section-label">System</div>', unsafe_allow_html=True)
         with st.expander("⚠ Danger Zone"):
             st.warning("Clears all unsaved local data permanently.")
             if st.button("Purge Local Cache", type="primary", use_container_width=True):
                 st.session_state.master_database = pd.DataFrame()
                 st.rerun()
 
+    # ─── MAIN CONTENT ──────────────────────────────────────────
 
-    # ── MAIN HEADER ─────────────────────────────────────────
+    # Page header
     record_count = len(st.session_state.master_database) if not st.session_state.master_database.empty else 0
-    model_short = selected_model.split(" ")[0]
+    col_count = len(st.session_state.master_database.columns) - 1 if not st.session_state.master_database.empty and len(st.session_state.master_database.columns) > 1 else 0
 
     st.markdown(f"""
-        <div style="display:flex; align-items:flex-end; justify-content:space-between; 
-                    padding-bottom:1.2rem; border-bottom:1px solid #1E2535; margin-bottom:1.5rem;">
+    <div class="page-title-block">
+        <div class="page-title-left">
+            <div class="page-title-icon">⬡</div>
             <div>
-                <div style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; color:#4A5468; 
-                            letter-spacing:0.14em; text-transform:uppercase; margin-bottom:0.4rem;">
-                    ⬡ CLOUDRESEARCH · COMMAND CENTER
-                </div>
-                <h1 style="font-family:'Syne',sans-serif; font-size:1.55rem; font-weight:800; 
-                           color:#EDF0F7; margin:0; letter-spacing:-0.02em; line-height:1.1;">
-                    Clinical Data<br><span style="color:#00D4AA;">Intelligence Platform</span>
-                </h1>
-            </div>
-            <div style="display:flex; gap:1rem; align-items:center;">
-                <div style="text-align:center; padding:0.6rem 1.1rem; background:#0D1119; 
-                            border:1px solid #1E2535; border-radius:8px;">
-                    <div style="font-family:'Syne',sans-serif; font-size:1.3rem; font-weight:700; color:#EDF0F7;">{record_count}</div>
-                    <div style="font-size:0.62rem; color:#4A5468; letter-spacing:0.1em; text-transform:uppercase; margin-top:2px;">Records</div>
-                </div>
-                <div style="text-align:center; padding:0.6rem 1.1rem; background:rgba(0,212,170,0.07); 
-                            border:1px solid rgba(0,212,170,0.2); border-radius:8px;">
-                    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:500; color:#00D4AA;">{model_short}</div>
-                    <div style="font-size:0.62rem; color:#4A5468; letter-spacing:0.1em; text-transform:uppercase; margin-top:2px;">Engine</div>
-                </div>
+                <div class="page-title-text">CloudResearch Command Center</div>
+                <div class="page-title-sub">Clinical Intelligence Platform · Secure Workspace</div>
             </div>
         </div>
+        <div class="status-badge">
+            <span class="status-dot"></span>
+            SESSION ACTIVE
+        </div>
+    </div>
     """, unsafe_allow_html=True)
 
-    tabs = st.tabs(["  Data Entry & Synchronization  ", "  Clinical Data Explorer  "])
-    expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip() and c.strip().lower() != 'system_id']
+    # Metric cards
+    st.markdown(f"""
+    <div class="metric-row">
+        <div class="metric-card">
+            <div class="metric-label">Records in Cache</div>
+            <div class="metric-value">{record_count:,}</div>
+            <div class="metric-sub">local session</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Schema Fields</div>
+            <div class="metric-value">{col_count}</div>
+            <div class="metric-sub">active columns</div>
+        </div>
+        <div class="metric-card">
+            <div class="metric-label">Active Engine</div>
+            <div class="metric-value" style="font-size:1rem;padding-top:0.3rem;">{"Gemini" if model_is_gemini else "Groq"}</div>
+            <div class="metric-sub">{'gemini-2.5-flash' if model_is_gemini else 'llama-4-scout-17b'}</div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
+    expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip() and c.strip().lower() != 'system_id']
+    tabs = st.tabs(["  Data Entry & Synchronization  ", "  Clinical Data Explorer  "])
 
     # ==========================================
     # TAB 1: DATA ENTRY & SYNC
     # ==========================================
     with tabs[0]:
-        st.subheader("Record Management")
-
         entry_mode = st.radio(
-            "Processing Mode:",
+            "Processing Mode",
             ["Single Record (Compile Pages)", "Batch Processing (Roster Extract)", "Update Existing Record"],
             index=0, horizontal=True
         )
         st.divider()
 
+        # ── Single Record ──
         if "Single Record" in entry_mode:
-            st.info("Upload all pages for a single subject. The engine will compile scattered data into a unified profile and assign one System ID.")
+            st.markdown("""
+            <div class="mode-info">
+                <span class="mode-icon">◈</span>
+                Upload all pages belonging to one subject. The engine compiles scattered data across pages into a unified record and assigns a single System ID.
+            </div>
+            """, unsafe_allow_html=True)
+
             with st.form("add_single_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader(
-                    "Upload Documents (PNG, JPG, PDF):",
+                    "Upload Documents (PNG, JPG, PDF)",
                     type=['png', 'jpg', 'jpeg', 'pdf'],
                     accept_multiple_files=True
                 )
-                submitted = st.form_submit_button(f"▶  Process via {model_short}", type="primary")
+                submitted = st.form_submit_button(f"⟳  Process via {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
                 final_prompt = build_final_prompt(
@@ -1105,7 +1145,7 @@ elif auth_status == True:
                         else:
                             ready_images.append(file.getvalue())
 
-                with st.spinner(f"Extracting parameters across {len(ready_images)} page(s)..."):
+                with st.spinner(f"Extracting and compiling profile across {len(ready_images)} page(s)..."):
                     master_patient_data = {col: 'N/A' for col in expected_cols}
                     for image_bytes in ready_images:
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
@@ -1121,8 +1161,8 @@ elif auth_status == True:
 
                         for data_obj in ai_data_list:
                             for col in expected_cols:
-                                new_val = str(data_obj.get(col, data_obj.get(f"{col}:", 'N/A'))).strip().upper()
-                                if new_val not in ['N/A', 'NAN', '', 'NONE']:
+                                new_val = str(data_obj.get(col, data_obj.get(f"{col}:", 'N/A'))).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']:
                                     if master_patient_data[col] == 'N/A':
                                         master_patient_data[col] = new_val
 
@@ -1139,17 +1179,24 @@ elif auth_status == True:
                     else:
                         st.session_state.master_database = current_batch_df
 
-                    st.success(f"Record compiled successfully. Assigned System ID: **{new_id}**")
+                    st.success(f"Record compiled successfully. System ID assigned: **{new_id}**")
 
+        # ── Batch Processing ──
         elif "Batch Processing" in entry_mode:
-            st.info("Upload rosters or multi-subject documents. The engine will isolate each entity and assign unique System IDs automatically.")
+            st.markdown("""
+            <div class="mode-info">
+                <span class="mode-icon">◈</span>
+                Upload rosters or multi-subject documents. The engine isolates individual records and assigns a unique System ID to each subject found.
+            </div>
+            """, unsafe_allow_html=True)
+
             with st.form("add_multiple_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader(
-                    "Upload Roster Documents (PNG, JPG, PDF):",
+                    "Upload Documents (PNG, JPG, PDF)",
                     type=['png', 'jpg', 'jpeg', 'pdf'],
                     accept_multiple_files=True
                 )
-                submitted = st.form_submit_button(f"▶  Process Batch via {model_short}", type="primary")
+                submitted = st.form_submit_button(f"⟳  Process Batch via {selected_model.split(' ')[0]}", type="primary")
 
             if submitted and uploaded_files:
                 final_prompt = build_final_prompt(
@@ -1169,7 +1216,7 @@ elif auth_status == True:
                 patient_dfs = []
                 for i, image_bytes in enumerate(ready_images):
                     with st.spinner(f"Analyzing page {i+1} of {len(ready_images)}..."):
-                        roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object."
+                        roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object in the array."
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, roster_prompt, selected_model)
                         try:
                             ai_data_list = json.loads(raw_json)
@@ -1180,11 +1227,8 @@ elif auth_status == True:
                             ai_data_list = [ai_data_list]
 
                         for patient_data in ai_data_list:
-                            filtered_data = {
-                                col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip().upper()
-                                for col in expected_cols
-                            }
-                            if any(val not in ['N/A', 'NAN', '', 'NONE'] for val in filtered_data.values()):
+                            filtered_data = {col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip() for col in expected_cols}
+                            if any(val not in ['N/A', 'nan', '', 'None'] for val in filtered_data.values()):
                                 patient_dfs.append(pd.DataFrame([filtered_data]))
 
                 if patient_dfs:
@@ -1206,29 +1250,36 @@ elif auth_status == True:
                     else:
                         st.session_state.master_database = current_batch_df
 
-                    st.success(f"Batch complete. **{len(current_batch_df)}** records extracted and queued for verification.")
+                    st.success(f"Batch complete. **{len(current_batch_df)}** records extracted and staged.")
 
+        # ── Update Existing ──
         elif "Update Existing" in entry_mode:
-            st.info("Append new documentation to an existing record. The engine will only overwrite empty fields.")
+            st.markdown("""
+            <div class="mode-info">
+                <span class="mode-icon">◈</span>
+                Append new documentation to an existing record. The engine will only fill empty fields — it will not overwrite existing values.
+            </div>
+            """, unsafe_allow_html=True)
+
             with st.form("update_form", clear_on_submit=True):
                 col1, col2 = st.columns([1, 2])
                 with col1:
-                    target_id = st.text_input("System ID Reference:", placeholder="CR-XXXX")
+                    target_id = st.text_input("System ID Reference", placeholder="CR-XXXX")
                 with col2:
                     update_files = st.file_uploader(
-                        "Upload Appendices (PNG, JPG, PDF):",
+                        "Upload Appendix Documents",
                         type=['png', 'jpg', 'jpeg', 'pdf'],
                         accept_multiple_files=True
                     )
-                update_submitted = st.form_submit_button(f"▶  Update Record via {model_short}", type="primary")
+                update_submitted = st.form_submit_button(f"⟳  Update Record via {selected_model.split(' ')[0]}", type="primary")
 
             if update_submitted:
                 if not target_id:
                     st.error("System ID reference is required.")
                 elif st.session_state.master_database.empty or target_id not in st.session_state.master_database['System_ID'].values:
-                    st.error(f"System ID **{target_id}** not found in local cache. Pull from cloud first.")
+                    st.error(f"System ID `{target_id}` not found in local cache. Pull from cloud first.")
                 elif not update_files:
-                    st.error("No documentation uploaded.")
+                    st.error("No documents uploaded.")
                 else:
                     final_prompt = build_final_prompt(
                         st.session_state.user_prompt,
@@ -1259,25 +1310,19 @@ elif auth_status == True:
                             else:
                                 ai_data = {}
 
-                            idx = st.session_state.master_database.index[
-                                st.session_state.master_database['System_ID'] == target_id
-                            ].tolist()[0]
+                            idx = st.session_state.master_database.index[st.session_state.master_database['System_ID'] == target_id].tolist()[0]
                             for col in expected_cols:
-                                new_val = str(ai_data.get(col, 'N/A')).strip().upper()
-                                if new_val not in ['N/A', 'NAN', '', 'NONE']:
+                                new_val = str(ai_data.get(col, 'N/A')).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']:
                                     st.session_state.master_database.at[idx, col] = new_val
-                    st.success(f"Record **{target_id}** updated successfully.")
 
-        # ── VERIFICATION TABLE ───────────────────────────────
+                    st.success(f"Record `{target_id}` updated successfully.")
+
+        # ── Data Verification Table ──
         if not st.session_state.master_database.empty:
             st.divider()
-            st.subheader("Data Verification Interface")
-            st.markdown("""
-                <p style="font-size:0.75rem; color:#4A5468; margin-bottom:0.8rem; font-family:'IBM Plex Sans',sans-serif;">
-                    Double-click any cell to correct values before committing to cloud. 
-                    All changes are held in local memory until explicitly committed.
-                </p>
-            """, unsafe_allow_html=True)
+            st.markdown('<div class="section-label">Data Verification Table</div>', unsafe_allow_html=True)
+            st.caption("Review and correct AI-extracted values before committing to cloud. Double-click any cell to edit.")
             st.session_state.master_database = st.data_editor(
                 st.session_state.master_database,
                 num_rows="dynamic",
@@ -1285,10 +1330,9 @@ elif auth_status == True:
                 key="data_verifier"
             )
 
-        # ── CLOUD SYNC ───────────────────────────────────────
+        # ── Cloud Sync ──
         st.divider()
-        st.subheader("Cloud Synchronization")
-
+        st.markdown('<div class="section-label">Cloud Synchronization</div>', unsafe_allow_html=True)
         col_x, col_y, col_z = st.columns([1, 1, 1])
 
         with col_x:
@@ -1298,11 +1342,11 @@ elif auth_status == True:
                 else:
                     missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
                     if missing_ids.any():
-                        st.error(f"Validation error: {missing_ids.sum()} record(s) are missing a System ID.")
+                        st.error(f"Validation failed: {missing_ids.sum()} record(s) missing System ID.")
                     elif not user_sheet_url or not project_tab:
-                        st.error("Database connection parameters are missing.")
+                        st.error("Database connection parameters missing.")
                     else:
-                        with st.spinner("Committing to Google servers..."):
+                        with st.spinner("Committing to cloud..."):
                             try:
                                 final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
                                 for col in final_cols:
@@ -1310,17 +1354,17 @@ elif auth_status == True:
                                         st.session_state.master_database[col] = 'N/A'
                                 st.session_state.master_database = st.session_state.master_database[final_cols]
                                 sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
-                                st.toast("Cloud commit successful.")
+                                st.toast("Cloud commit successful.", icon="↑")
                                 st.rerun()
                             except Exception as e:
                                 st.error(f"Commit failed: {e}")
 
         with col_y:
             if st.button("↓  Pull from Cloud", use_container_width=True):
-                with st.spinner("Downloading database instance..."):
-                    if not user_sheet_url or not project_tab:
-                        st.error("Database connection parameters are missing.")
-                    else:
+                if not user_sheet_url or not project_tab:
+                    st.error("Database connection parameters missing.")
+                else:
+                    with st.spinner("Downloading database instance..."):
                         try:
                             pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
                             st.session_state.master_database = pulled_df
@@ -1328,7 +1372,7 @@ elif auth_status == True:
                                 pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
                                 if pulled_cols:
                                     st.session_state.schema_input = ", ".join(pulled_cols)
-                            st.toast("Local cache synchronized with cloud.")
+                            st.toast("Local cache synchronized.", icon="↓")
                             st.rerun()
                         except Exception as e:
                             st.error(f"Sync failed: {e}")
@@ -1337,28 +1381,24 @@ elif auth_status == True:
             if not st.session_state.master_database.empty:
                 csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
                 st.download_button(
-                    "↓  Export Local CSV",
+                    "⬇  Export CSV",
                     data=csv_data,
                     file_name=f"{project_tab}_export.csv",
                     mime="text/csv",
                     use_container_width=True
                 )
 
-
     # ==========================================
     # TAB 2: CLINICAL DATA EXPLORER
     # ==========================================
     with tabs[1]:
-        st.subheader("Clinical Data Explorer")
-
         if st.session_state.master_database.empty:
             st.markdown("""
-                <div style="text-align:center; padding:4rem 2rem; border:1px dashed #1E2535; border-radius:10px; margin-top:1rem;">
-                    <div style="font-size:1.8rem; margin-bottom:1rem; opacity:0.3;">⬡</div>
-                    <div style="font-family:'IBM Plex Sans',sans-serif; font-size:0.82rem; color:#4A5468;">
-                        No data available. Synchronize with cloud or process records to enable analytics.
-                    </div>
-                </div>
+            <div style="display:flex;flex-direction:column;align-items:center;padding:3rem 0;color:#3A4D6A;font-family:'Instrument Sans',sans-serif;">
+                <div style="font-size:2rem;margin-bottom:0.75rem;">◫</div>
+                <div style="font-size:0.9rem;font-weight:600;color:#4A6080;margin-bottom:0.4rem;">No data in local cache</div>
+                <div style="font-size:0.78rem;">Sync from cloud or process records to enable analytics.</div>
+            </div>
             """, unsafe_allow_html=True)
         else:
             df = st.session_state.master_database.copy()
@@ -1369,21 +1409,7 @@ elif auth_status == True:
                     df[col] = df[col].astype(str).str.strip().str.upper()
                     df[col] = df[col].replace({'N/A': 'N/A', 'NAN': 'N/A', 'NONE': 'N/A', '': 'N/A'})
 
-            # Summary metrics row
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            total_records = len(df)
-            complete_records = df.dropna().shape[0]
-            schema_cols = len(df.columns) - 1
-
-            m1, m2, m3 = st.columns(3)
-            with m1:
-                st.metric("Total Records", total_records)
-            with m2:
-                st.metric("Schema Columns", schema_cols)
-            with m3:
-                st.metric("Numeric Fields", len(numeric_cols))
-
-            st.divider()
+            st.markdown('<div class="section-label">Visualization Parameters</div>', unsafe_allow_html=True)
 
             all_columns = df.columns.tolist()
             col1, col2, col3 = st.columns([2, 2, 1])
@@ -1392,20 +1418,21 @@ elif auth_status == True:
             with col2:
                 y_axis = st.selectbox("Numerical Axis (Y)", all_columns)
             with col3:
-                chart_type = st.selectbox("Chart Type", ["Bar", "Pie", "Scatter"])
+                chart_type = st.radio("Chart", ["Bar", "Pie", "Scatter"])
 
-            # Plotly dark theme to match app
-            plot_template = {
-                "layout": {
-                    "paper_bgcolor": "rgba(0,0,0,0)",
-                    "plot_bgcolor": "#0D1119",
-                    "font": {"family": "IBM Plex Sans, sans-serif", "color": "#8B95AE", "size": 11},
-                    "title": {"font": {"family": "Syne, sans-serif", "color": "#EDF0F7", "size": 14}},
-                    "xaxis": {"gridcolor": "#1E2535", "linecolor": "#1E2535", "tickcolor": "#4A5468"},
-                    "yaxis": {"gridcolor": "#1E2535", "linecolor": "#1E2535", "tickcolor": "#4A5468"},
-                    "colorway": ["#00D4AA", "#4B9FFF", "#FFB547", "#FF4B6E", "#A78BFA", "#34D399"]
-                }
-            }
+            # Plotly dark template to match the app theme
+            plotly_template = dict(
+                layout=dict(
+                    paper_bgcolor="#0C111D",
+                    plot_bgcolor="#080C14",
+                    font=dict(family="Instrument Sans", color="#8BA5D0", size=12),
+                    title=dict(font=dict(color="#C8D6F0", size=14, family="Instrument Sans")),
+                    xaxis=dict(gridcolor="#141D30", linecolor="#1A2540", tickfont=dict(color="#5A7099")),
+                    yaxis=dict(gridcolor="#141D30", linecolor="#1A2540", tickfont=dict(color="#5A7099")),
+                    legend=dict(bgcolor="#0C111D", bordercolor="#1A2540", borderwidth=1),
+                    colorway=["#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#06B6D4", "#84CC16"]
+                )
+            )
 
             try:
                 clean_chart_df = df[~df[x_axis].isin(['N/A'])]
@@ -1413,28 +1440,15 @@ elif auth_status == True:
 
                 if chart_type == "Bar":
                     fig = px.bar(clean_chart_df, x=x_axis, y=y_axis, color=x_axis,
-                                 title=f"{y_axis} by {x_axis}",
-                                 color_discrete_sequence=["#00D4AA","#4B9FFF","#FFB547","#FF4B6E","#A78BFA","#34D399"])
+                                 title=f"{y_axis} by {x_axis}", template=plotly_template)
                 elif chart_type == "Pie":
                     fig = px.pie(clean_chart_df, names=x_axis,
-                                 title=f"Distribution of {x_axis}",
-                                 color_discrete_sequence=["#00D4AA","#4B9FFF","#FFB547","#FF4B6E","#A78BFA","#34D399"])
+                                 title=f"Distribution of {x_axis}", template=plotly_template)
                 else:
                     fig = px.scatter(clean_chart_df, x=x_axis, y=y_axis, color=x_axis,
-                                     title=f"{y_axis} vs {x_axis}",
-                                     color_discrete_sequence=["#00D4AA","#4B9FFF","#FFB547","#FF4B6E","#A78BFA","#34D399"])
+                                     title=f"{y_axis} vs {x_axis}", template=plotly_template)
 
-                fig.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="#0D1119",
-                    font=dict(family="IBM Plex Sans, sans-serif", color="#8B95AE", size=11),
-                    title_font=dict(family="Syne, sans-serif", color="#EDF0F7", size=13),
-                    xaxis=dict(gridcolor="#1E2535", linecolor="#1E2535"),
-                    yaxis=dict(gridcolor="#1E2535", linecolor="#1E2535"),
-                    legend=dict(bgcolor="rgba(0,0,0,0)", bordercolor="#1E2535"),
-                    margin=dict(t=50, b=30, l=20, r=20)
-                )
-
+                fig.update_layout(margin=dict(t=50, l=10, r=10, b=10))
                 st.plotly_chart(fig, use_container_width=True)
 
             except Exception as e:
