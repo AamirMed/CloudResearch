@@ -10,19 +10,24 @@ import string
 from groq import Groq
 import google.generativeai as genai
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+from google.oauth2.service_account import Credentials # Replaced deprecated oauth2client
 from PIL import Image
 import io
 import plotly.express as px
 
-# --- 1. UI SETUP ---
+# --- 1. UI SETUP & GLOBAL CONFIG ---
 st.set_page_config(page_title="CloudResearch Command Center", layout="wide", page_icon="☁️")
+
+# Configure Gemini globally so it doesn't re-auth on every loop
+if "GEMINI_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # --- 2. HELPER FUNCTIONS ---
 def get_google_sheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    # Using modern Google Auth library
+    creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
 
 def generate_unique_id(existing_ids):
@@ -94,7 +99,6 @@ def compress_image(image_bytes):
     img.save(output, format="JPEG", quality=85)
     return output.getvalue()
 
-# --- THE SMART, MULTI-BRAIN DECODER ---
 def blueprint_decoder(image_bytes, columns, rules, model_choice):
     system_instructions = (
         "You are an expert clinical data extractor and medical interpreter. "
@@ -105,13 +109,14 @@ def blueprint_decoder(image_bytes, columns, rules, model_choice):
     prompt = f"{system_instructions}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nSPECIFIC USER RULES & CONTEXT: {rules}\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If a value is missing or cannot be logically inferred, output 'N/A'. If you cannot read the image, output an empty array []."
     
     if "Gemini" in model_choice:
-        genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
-        img = Image.open(io.BytesIO(image_bytes))
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
+        # Pass Gemini images through the compressor first to save quota/bandwidth
+        compressed_bytes = compress_image(image_bytes)
+        img = Image.open(io.BytesIO(compressed_bytes))
             
-        # POINTING TO THE ACTIVE 2.5 MODEL
-        model = genai.GenerativeModel('gemini-2.5-flash')
+        # Dynamically pull the model string from secrets, fallback to stable version
+        gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+        model = genai.GenerativeModel(gemini_model_name)
+        
         response = model.generate_content(
             [prompt, img],
             generation_config={"response_mime_type": "application/json"}
@@ -190,8 +195,9 @@ elif auth_status == True:
                     pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
                     if pulled_cols:
                         st.session_state.schema_input = ", ".join(pulled_cols)
-            except Exception:
-                pass 
+            except Exception as e:
+                # Replaced silent fail with loud warning
+                st.error(f"⚠️ Background sync failed to connect to Google Sheets: {e}") 
 
     with st.sidebar:
         st.success(f"Welcome back, {name}!")
@@ -201,7 +207,7 @@ elif auth_status == True:
         st.header("🧠 1. AI Engine")
         selected_model = st.selectbox(
             "Select Extraction Model:", 
-            ["Google Gemini (2.5 Flash)", "Groq (Llama 4 Vision)"],
+            ["Google Gemini", "Groq (Llama 4 Vision)"],
             help="Gemini is smarter for complex medical logic. Groq is faster for simple documents."
         )
         st.divider()
@@ -262,9 +268,12 @@ elif auth_status == True:
         
         st.divider()
         st.header("💾 4. Local Controls")
-        if st.button("🚨 Clear Local Memory"):
-            st.session_state.master_database = pd.DataFrame()
-            st.rerun()
+        # Wrapped Memory wipe in an expander confirmation
+        with st.expander("🚨 Danger Zone"):
+            st.warning("This will erase unsaved local data from the screen.")
+            if st.button("Clear Local Memory", type="primary", use_container_width=True):
+                st.session_state.master_database = pd.DataFrame()
+                st.rerun()
 
     st.title("☁️ CloudResearch Command Center")
 
@@ -302,18 +311,18 @@ elif auth_status == True:
                                 st.text(raw_json)
                             continue
 
-                        if isinstance(ai_data_list, list) and len(ai_data_list) > 0:
-                            ai_data = ai_data_list[0] 
-                        elif isinstance(ai_data_list, dict):
-                            ai_data = ai_data_list
-                        else:
-                            ai_data = {}
+                        # Ensure it's a list so we can iterate through it properly and capture all objects
+                        if isinstance(ai_data_list, dict):
+                            ai_data_list = [ai_data_list]
+                        elif not isinstance(ai_data_list, list):
+                            ai_data_list = []
 
-                        for col in expected_cols:
-                            new_val = str(ai_data.get(col, ai_data.get(f"{col}:", 'N/A'))).strip()
-                            if new_val not in ['N/A', 'nan', '', 'None']:
-                                if master_patient_data[col] == 'N/A':
-                                    master_patient_data[col] = new_val
+                        for data_obj in ai_data_list:
+                            for col in expected_cols:
+                                new_val = str(data_obj.get(col, data_obj.get(f"{col}:", 'N/A'))).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']:
+                                    if master_patient_data[col] == 'N/A':
+                                        master_patient_data[col] = new_val
                     
                     current_batch_df = pd.DataFrame([master_patient_data])
                     existing_db_ids = set()
