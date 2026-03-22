@@ -17,11 +17,20 @@ import io
 import plotly.express as px
 
 # --- 1. UI SETUP & GLOBAL CONFIG ---
-# Removed the cloud icon, kept layout wide
 st.set_page_config(page_title="CloudResearch Command Center", layout="wide")
 
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+# --- ENTERPRISE TYPOGRAPHY OVERRIDE ---
+st.markdown("""
+    <style>
+        h1 { font-size: 1.5rem !important; font-weight: 700 !important; padding-bottom: 0.5rem !important; }
+        h2 { font-size: 1.1rem !important; font-weight: 600 !important; padding-top: 1rem !important; padding-bottom: 0.2rem !important; }
+        h3 { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
+        .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- 2. HELPER FUNCTIONS ---
 def get_google_sheet_client():
@@ -297,23 +306,23 @@ elif auth_status == True:
         
         st.header("4. Extraction Logic")
         st.session_state.user_prompt = st.text_area(
-            "Primary Directive", 
+            "🧠 Prompt", 
             value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents.")
         )
         
-        with st.expander("Advanced Extraction Constraints"):
+        with st.expander("⚙️ Advanced Options (optional)"):
             st.session_state.abbreviations = st.text_area(
-                "Abbreviations Map", 
+                "Abbreviations", 
                 value=st.session_state.get("abbreviations", ""), 
                 placeholder="DM → Diabetes Mellitus\nHTN → Hypertension\nS → Sensitive\nR → Resistant"
             )
             st.session_state.extra_rules = st.text_area(
-                "Inclusion Rules", 
+                "Extra Rules", 
                 value=st.session_state.get("extra_rules", ""), 
                 placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple present\n- Ignore illegible text"
             )
             st.session_state.anti_rules = st.text_area(
-                "Exclusion Rules", 
+                "Anti-Rules", 
                 value=st.session_state.get("anti_rules", ""), 
                 placeholder="- Do not hallucinate values\n- Do not infer missing data"
             )
