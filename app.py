@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 import streamlit as st
 import streamlit_authenticator as stauth
 import pandas as pd
@@ -18,19 +17,20 @@ import io
 import plotly.express as px
 
 # --- 1. UI SETUP & GLOBAL CONFIG ---
-st.set_page_config(page_title="CloudResearch", layout="wide", page_icon=None)
+st.set_page_config(page_title="CloudResearch Command Center", layout="wide")
 
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# ============================================================
-# CLOUDRESEARCH -- PRECISION DARK UI SYSTEM
-# Typography: IBM Plex Sans (body) + Syne (display)
-# Palette: Deep navy base, electric teal accent, slate surfaces
-# ============================================================
-with open("style.css", "r") as _f:
-    st.markdown(_f.read(), unsafe_allow_html=True)
-
+# --- ENTERPRISE TYPOGRAPHY OVERRIDE ---
+st.markdown("""
+    <style>
+        h1 { font-size: 1.5rem !important; font-weight: 700 !important; padding-bottom: 0.5rem !important; }
+        h2 { font-size: 1.1rem !important; font-weight: 600 !important; padding-top: 1rem !important; padding-bottom: 0.2rem !important; }
+        h3 { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
+        .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- 2. HELPER FUNCTIONS ---
 def get_google_sheet_client():
@@ -87,23 +87,16 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
         return cloud_df
 
     elif mode == "push":
-        # Read backup before clearing
-        backup = sheet.get_all_values()
-        try:
-            sheet.clear()
-            if not local_dataframe.empty:
-                df_to_upload = local_dataframe.copy().astype(str)
-                cols = ['System_ID'] + [c for c in df_to_upload.columns if c != 'System_ID']
-                df_to_upload = df_to_upload[cols]
-                data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
-                sheet.update(range_name="A1", values=data_to_upload)
-            else:
-                data_to_upload = [local_dataframe.columns.values.tolist()]
-                sheet.update(range_name="A1", values=data_to_upload)
-        except Exception as e:
-            if backup:
-                sheet.update(range_name="A1", values=backup)
-            raise e
+        sheet.clear()
+        if not local_dataframe.empty:
+            df_to_upload = local_dataframe.copy().astype(str)
+            cols = ['System_ID'] + [c for c in df_to_upload.columns if c != 'System_ID']
+            df_to_upload = df_to_upload[cols]
+            data_to_upload = [df_to_upload.columns.values.tolist()] + df_to_upload.values.tolist()
+            sheet.update(range_name="A1", values=data_to_upload)
+        else:
+            data_to_upload = [local_dataframe.columns.values.tolist()]
+            sheet.update(range_name="A1", values=data_to_upload)
         return local_dataframe
 
 def compress_image(image_bytes):
@@ -129,7 +122,7 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
     extra_text = extra_rules.strip() if extra_rules.strip() else "None"
     anti_text = anti_rules.strip() if anti_rules.strip() else "- Do not hallucinate values\n- Do not guess missing data"
     
-    return f"""ROLE:
+    final_prompt = f"""ROLE:
 You are an expert clinical data extraction system.
 
 USER INSTRUCTION:
@@ -151,6 +144,7 @@ Return ONLY valid JSON format.
 No explanations, markdown formatting, or conversational text.
 Use "N/A" if missing.
 """
+    return final_prompt
 
 def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     full_prompt = f"{final_prompt}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If you cannot read the image, output an empty array []."
@@ -158,18 +152,22 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     if "Gemini" in model_choice:
         compressed_bytes = compress_image(image_bytes)
         img = Image.open(io.BytesIO(compressed_bytes))
+            
         gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
         model = genai.GenerativeModel(gemini_model_name)
+        
         response = model.generate_content(
             [full_prompt, img],
             generation_config={"response_mime_type": "application/json"}
         )
         return response.text.strip()
+        
     else:
         client = Groq(api_key=st.secrets["GROQ_API_KEY"])
         compressed_bytes = compress_image(image_bytes)
         base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
         groq_prompt = full_prompt + " ONLY output the raw JSON array."
+        
         response = client.chat.completions.create(
             model="meta-llama/llama-4-scout-17b-16e-instruct", 
             messages=[{"role": "user", "content": [{"type": "text", "text": groq_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
@@ -181,7 +179,6 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
             raw_output = raw_output.split("```")[0]
         match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
         return match.group(1) if match else raw_output.strip()
-
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
@@ -203,41 +200,18 @@ try:
     )
     authenticator.login()
 except Exception as e:
-    st.error(f"Authentication system error. Please contact your administrator.")
-    st.error(f"Technical detail: {e}")
+    st.error(f"Authentication System Error: The library failed to load.")
+    st.error(f"Developer details: {e}")
     st.stop()
-
 
 # --- 4. LOGIN LOGIC ---
 auth_status = st.session_state.get("authentication_status")
 
 if auth_status == False:
-    st.markdown("""
-        <div style="max-width:380px; margin:6rem auto; text-align:center;">
-            <div style="font-family:'Syne',sans-serif; font-size:1.4rem; font-weight:800; color:#EDF0F7; margin-bottom:0.3rem;">
-                Cloud<span style="color:#00D4AA">Research</span>
-            </div>
-            <div style="font-size:0.72rem; color:#4A5468; letter-spacing:0.12em; text-transform:uppercase; margin-bottom:2rem;">
-                Clinical Intelligence Platform
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-    st.error("Invalid credentials. Access denied.")
-
+    st.error("Username or password is incorrect.")
 elif auth_status == None:
-    st.markdown("""
-        <div style="max-width:380px; margin:5rem auto; text-align:center;">
-            <div style="font-family:'Syne',sans-serif; font-size:1.8rem; font-weight:800; color:#EDF0F7; margin-bottom:0.3rem;">
-                Cloud<span style="color:#00D4AA">Research</span>
-            </div>
-            <div style="font-size:0.7rem; color:#4A5468; letter-spacing:0.14em; text-transform:uppercase; margin-bottom:2.5rem;">
-                Clinical Intelligence Platform
-            </div>
-            <div style="font-size:0.8rem; color:#6B7A99; line-height:1.6;">
-                Enter your credentials to access the secure command center.
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
+    st.title("CloudResearch")
+    st.warning("Please enter your credentials to access the Command Center.")
 
 elif auth_status == True:
     username = st.session_state.get("username")
@@ -261,61 +235,31 @@ elif auth_status == True:
                     if pulled_cols:
                         st.session_state.schema_input = ", ".join(pulled_cols)
             except Exception as e:
-                st.warning(f"Auto-sync failed on login. Pull manually before adding records. Detail: {e}")
+                st.error(f"Background sync failed to connect to Google Sheets: {e}") 
 
-    # -- SIDEBAR ---------------------------------------------
     with st.sidebar:
-
-        # Logo mark
-        st.markdown(f"""
-            <div class="sidebar-logo">
-                <div class="sidebar-hexmark">#</div>
-                <div>
-                    <div class="sidebar-wordmark">Cloud<span>Research</span></div>
-                    <div class="sidebar-version">v2.0 - CLINICAL</div>
-                </div>
-            </div>
-        """, unsafe_allow_html=True)
-
-        # Session status
-        st.markdown(f"""
-            <div style="background:rgba(0,212,170,0.07); border:1px solid rgba(0,212,170,0.2); border-radius:6px; 
-                        padding:0.5rem 0.75rem; margin-bottom:1rem; display:flex; align-items:center; gap:0.5rem;">
-                <span class="status-dot"></span>
-                <span style="font-family:'IBM Plex Sans',sans-serif; font-size:0.75rem; color:#80EDD9; font-weight:500;">
-                    {name}
-                </span>
-            </div>
-        """, unsafe_allow_html=True)
-
-        authenticator.logout("Sign Out", "sidebar")
+        st.success(f"Session Active: {name}")
+        authenticator.logout("Logout", "sidebar")
         st.divider()
-
-        st.header("Processing Engine")
+        
+        st.header("1. Processing Engine")
         selected_model = st.selectbox(
-            "Model Selection:",
+            "Model Selection:", 
             ["Google Gemini", "Groq (Llama 4 Vision)"],
-            help="Gemini: Deep reasoning for complex documents. Groq: High-speed for structured rosters."
+            help="Gemini: Deep reasoning. Groq: High speed."
         )
-
         st.divider()
-
-        st.header("Database Connection")
-        user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url, placeholder="https://docs.google.com/...")
-        project_tab = username
-        st.markdown(f"""
-            <div style="font-family:'IBM Plex Mono',monospace; font-size:0.68rem; color:#4A5468; 
-                        margin-top:0.3rem; display:flex; align-items:center; gap:0.4rem;">
-                <span style="color:#2A3550;">#</span> 
-                Active directory: <span style="color:#6B7A99;">{project_tab}</span>
-            </div>
-        """, unsafe_allow_html=True)
-
+        
+        st.header("2. Database Connection")
+        user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url)
+        project_tab = username 
+        st.caption(f"Active Directory: {project_tab}")
+        
         st.divider()
-
-        st.header("Target Schema")
-        st.info("System IDs are auto-generated. Do not define them here.")
-
+        
+        st.header("3. Target Schema")
+        st.info("System IDs are auto-generated to prevent duplicate records and ensure safe cloud synchronization.")
+        
         if "safe_schema_val" not in st.session_state:
             st.session_state.safe_schema_val = st.session_state.schema_input
 
@@ -330,14 +274,14 @@ elif auth_status == True:
                             if cloud_headers:
                                 clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
                                 st.session_state.safe_schema_val = ", ".join(clean_headers)
-                                st.toast("Schema synchronized from cloud.")
+                                st.toast("Schema pulled successfully.")
                                 st.rerun()
                             else:
                                 st.toast("Target sheet is empty.")
                         except Exception as e:
                             st.toast(f"Sync error: {e}")
                 else:
-                    st.toast("Database URL required.")
+                    st.toast("Database connection required.")
 
         with col_push:
             if st.button("Push Schema", use_container_width=True):
@@ -347,103 +291,148 @@ elif auth_status == True:
                             sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
                             current_cols = [c.strip() for c in st.session_state.safe_schema_val.split(',') if c.strip()]
                             final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
-                            sheet.update(range_name="A1", values=[final_headers])
-                            st.toast("Schema committed to cloud.")
+                            sheet.update(range_name="A1", values=[final_headers]) 
+                            st.toast("Schema pushed successfully.")
                         except Exception as e:
                             st.toast(f"Sync error: {e}")
                 else:
-                    st.toast("Database URL required.")
-
-        updated_schema = st.text_input("Schema Columns:", value=st.session_state.safe_schema_val,
-                                        placeholder="Age, Gender, Organism, Antibiotic...")
+                    st.toast("Database connection required.")
+        
+        updated_schema = st.text_input("Define Schema Columns:", value=st.session_state.safe_schema_val)
         st.session_state.safe_schema_val = updated_schema
         st.session_state.schema_input = updated_schema
-
+        
         st.divider()
-        st.header("Extraction Logic")
+        
+        st.header("4. Extraction Logic")
         st.session_state.user_prompt = st.text_area(
-            "Primary Directive:",
-            value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents."),
-            height=80
+            "Primary Directive", 
+            value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents.")
         )
-
+        
         with st.expander("Advanced Extraction Constraints"):
             st.session_state.abbreviations = st.text_area(
-                "Abbreviations Map:",
-                value=st.session_state.get("abbreviations", ""),
-                placeholder="DM -> Diabetes Mellitus\nHTN -> Hypertension\nS -> Sensitive\nR -> Resistant",
-                height=90
+                "Abbreviations Map", 
+                value=st.session_state.get("abbreviations", ""), 
+                placeholder="DM → Diabetes Mellitus\nHTN → Hypertension\nS → Sensitive\nR → Resistant"
             )
             st.session_state.extra_rules = st.text_area(
-                "Inclusion Rules:",
-                value=st.session_state.get("extra_rules", ""),
-                placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple",
-                height=80
+                "Inclusion Rules", 
+                value=st.session_state.get("extra_rules", ""), 
+                placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple present\n- Ignore illegible text"
             )
             st.session_state.anti_rules = st.text_area(
-                "Exclusion Rules:",
-                value=st.session_state.get("anti_rules", ""),
-                placeholder="- Do not hallucinate values\n- Do not infer missing data",
-                height=80
+                "Exclusion Rules", 
+                value=st.session_state.get("anti_rules", ""), 
+                placeholder="- Do not hallucinate values\n- Do not infer missing data"
             )
-
+        
         st.divider()
-        st.header("System Controls")
-        with st.expander("Danger Zone"):
-            st.warning("Clears all unsaved local data permanently.")
+        st.header("5. System Controls")
+        with st.expander("System Reset"):
+            st.warning("Warning: This action clears all unsaved local data.")
             if st.button("Purge Local Cache", type="primary", use_container_width=True):
                 st.session_state.master_database = pd.DataFrame()
                 st.rerun()
 
+    st.title("CloudResearch Command Center")
 
-    # -- MAIN HEADER -----------------------------------------
-    record_count = len(st.session_state.master_database) if not st.session_state.master_database.empty else 0
-    model_short = selected_model.split(" ")[0]
-
-    st.markdown(f"""
-        <div style="display:flex; align-items:flex-end; justify-content:space-between; 
-                    padding-bottom:1.2rem; border-bottom:1px solid #1E2535; margin-bottom:1.5rem;">
-            <div>
-                <div style="font-family:'IBM Plex Mono',monospace; font-size:0.62rem; color:#4A5468; 
-                            letter-spacing:0.14em; text-transform:uppercase; margin-bottom:0.4rem;">
-                    # CLOUDRESEARCH - COMMAND CENTER
-                </div>
-                <h1 style="font-family:'Syne',sans-serif; font-size:1.55rem; font-weight:800; 
-                           color:#EDF0F7; margin:0; letter-spacing:-0.02em; line-height:1.1;">
-                    Clinical Data<br><span style="color:#00D4AA;">Intelligence Platform</span>
-                </h1>
-            </div>
-            <div style="display:flex; gap:1rem; align-items:center;">
-                <div style="text-align:center; padding:0.6rem 1.1rem; background:#0D1119; 
-                            border:1px solid #1E2535; border-radius:8px;">
-                    <div style="font-family:'Syne',sans-serif; font-size:1.3rem; font-weight:700; color:#EDF0F7;">{record_count}</div>
-                    <div style="font-size:0.62rem; color:#4A5468; letter-spacing:0.1em; text-transform:uppercase; margin-top:2px;">Records</div>
-                </div>
-                <div style="text-align:center; padding:0.6rem 1.1rem; background:rgba(0,212,170,0.07); 
-                            border:1px solid rgba(0,212,170,0.2); border-radius:8px;">
-                    <div style="font-family:'IBM Plex Mono',monospace; font-size:0.82rem; font-weight:500; color:#00D4AA;">{model_short}</div>
-                    <div style="font-size:0.62rem; color:#4A5468; letter-spacing:0.1em; text-transform:uppercase; margin-top:2px;">Engine</div>
-                </div>
-            </div>
-        </div>
-    """, unsafe_allow_html=True)
-
-    tabs = st.tabs(["  Data Entry & Synchronization  ", "  Clinical Data Explorer  "])
-    expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip() and c.strip().lower() != 'system_id']
-
+    tabs = st.tabs(["Data Entry & Synchronization", "Clinical Data Explorer"])
+    expected_cols = [c.strip() for c in st.session_state.schema_input.split(',') if c.strip()]
 
     # ==========================================
     # TAB 1: DATA ENTRY & SYNC
     # ==========================================
     with tabs[0]:
         st.subheader("Record Management")
-
         entry_mode = st.radio(
-            "Processing Mode:",
-            ["Single Record (Compile Pages)", "Batch Processing (Roster Extract)", "Update Existing Record"],
+            "Select Processing Mode:", 
+            ["Single Record (Compile Pages)", "Batch Processing (Roster Extract)", "Update Existing Record"], 
             index=0, horizontal=True
         )
         st.divider()
 
         if "Single Record" in entry_mode:
-            st.info("Upload all pages for a single subject. 
+            st.info("Upload documents for a single subject. The engine will compile data into a unified profile.")
+            with st.form("add_single_form", clear_on_submit=True):
+                uploaded_files = st.file_uploader("Upload Documents:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
+                submitted = st.form_submit_button(f"Process via {selected_model.split(' ')[0]}", type="primary")
+
+            if submitted and uploaded_files:
+                final_prompt = build_final_prompt(
+                    st.session_state.user_prompt,
+                    st.session_state.abbreviations,
+                    st.session_state.extra_rules,
+                    st.session_state.anti_rules
+                )
+
+                with st.spinner("Pre-processing documents..."):
+                    ready_images = []
+                    for file in uploaded_files:
+                        if file.name.lower().endswith('.pdf'):
+                            ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                        else:
+                            ready_images.append(file.getvalue())
+
+                with st.spinner("Extracting parameters and compiling profile..."):
+                    master_patient_data = {col: 'N/A' for col in expected_cols}
+                    for image_bytes in ready_images:
+                        raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
+                        try:
+                            ai_data_list = json.loads(raw_json) 
+                        except json.JSONDecodeError:
+                            continue
+
+                        if isinstance(ai_data_list, dict):
+                            ai_data_list = [ai_data_list]
+                        elif not isinstance(ai_data_list, list):
+                            ai_data_list = []
+
+                        for data_obj in ai_data_list:
+                            for col in expected_cols:
+                                new_val = str(data_obj.get(col, data_obj.get(f"{col}:", 'N/A'))).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']:
+                                    if master_patient_data[col] == 'N/A':
+                                        master_patient_data[col] = new_val
+                    
+                    current_batch_df = pd.DataFrame([master_patient_data])
+                    existing_db_ids = set()
+                    if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
+                        existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
+                    
+                    new_id = generate_unique_id(existing_db_ids)
+                    current_batch_df.insert(0, "System_ID", [new_id])
+                    
+                    if not st.session_state.master_database.empty:
+                        st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
+                    else:
+                        st.session_state.master_database = current_batch_df
+                    st.success(f"Record compiled successfully. Assigned ID: {new_id}")
+
+        elif "Batch Processing" in entry_mode:
+            st.info("Upload rosters or multi-subject reports. The engine will isolate entities and assign unique IDs.")
+            with st.form("add_multiple_form", clear_on_submit=True):
+                uploaded_files = st.file_uploader("Upload Documents:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
+                submitted = st.form_submit_button(f"Process Batch via {selected_model.split(' ')[0]}", type="primary")
+
+            if submitted and uploaded_files:
+                final_prompt = build_final_prompt(
+                    st.session_state.user_prompt,
+                    st.session_state.abbreviations,
+                    st.session_state.extra_rules,
+                    st.session_state.anti_rules
+                )
+
+                with st.spinner("Pre-processing documents..."):
+                    ready_images = []
+                    for file in uploaded_files:
+                        if file.name.lower().endswith('.pdf'):
+                            ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                        else:
+                            ready_images.append(file.getvalue())
+
+                patient_dfs = []
+                for i, image_bytes in enumerate(ready_images):
+                    with st.spinner(f"Analyzing structure on page {i+1}..."):
+                        roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object in the array."
+                        raw_json = blueprint
