@@ -22,7 +22,6 @@ st.set_page_config(page_title="CloudResearch Command Center", layout="wide")
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
-# --- ENTERPRISE TYPOGRAPHY OVERRIDE ---
 st.markdown("""
     <style>
         h1 { font-size: 1.5rem !important; font-weight: 700 !important; padding-bottom: 0.5rem !important; }
@@ -33,6 +32,7 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # --- 2. HELPER FUNCTIONS ---
+@st.cache_resource
 def get_google_sheet_client():
     scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
@@ -46,6 +46,52 @@ def generate_unique_id(existing_ids):
         new_id = f"CR-{random_str}"
         if new_id not in existing_ids:
             return new_id
+
+# --- NEW: MASTER ADMIN DIRECTORY ENGINE ---
+def sync_user_profile(username, mode="pull", profile_data=None):
+    admin_url = st.secrets.get("ADMIN_SHEET_URL", "")
+    if not admin_url:
+        return None
+
+    client = get_google_sheet_client()
+    try:
+        sheet = client.open_by_url(admin_url).worksheet("Profiles")
+    except gspread.exceptions.WorksheetNotFound:
+        spreadsheet = client.open_by_url(admin_url)
+        sheet = spreadsheet.add_worksheet(title="Profiles", rows="100", cols="10")
+        headers = ["Username", "Target_Sheet_URL", "Schema", "Prompt", "Abbreviations", "Extra_Rules", "Anti_Rules"]
+        sheet.update(range_name="A1:G1", values=[headers])
+
+    if mode == "pull":
+        records = sheet.get_all_records()
+        for row in records:
+            if str(row.get("Username")) == username:
+                return row
+        return None 
+        
+    elif mode == "push" and profile_data:
+        records = sheet.get_all_records()
+        row_idx = None
+        for i, row in enumerate(records):
+            if str(row.get("Username")) == username:
+                row_idx = i + 2 
+                break
+                
+        row_values = [
+            username,
+            profile_data.get("Target_Sheet_URL", ""),
+            profile_data.get("Schema", ""),
+            profile_data.get("Prompt", ""),
+            profile_data.get("Abbreviations", ""),
+            profile_data.get("Extra_Rules", ""),
+            profile_data.get("Anti_Rules", "")
+        ]
+        
+        if row_idx:
+            sheet.update(range_name=f"A{row_idx}:G{row_idx}", values=[row_values])
+        else:
+            sheet.append_row(row_values)
+        return True
 
 def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
     google_client = get_google_sheet_client()
@@ -204,7 +250,7 @@ except Exception as e:
     st.error(f"Developer details: {e}")
     st.stop()
 
-# --- 4. LOGIN LOGIC ---
+# --- 4. SECURE PROFILE LOADING & LOGIC ---
 auth_status = st.session_state.get("authentication_status")
 
 if auth_status == False:
@@ -217,23 +263,36 @@ elif auth_status == True:
     username = st.session_state.get("username")
     name = st.session_state.get("name")
     
-    user_prefs = st.secrets["credentials"]["usernames"][username]
-    saved_sheet_url = user_prefs.get("sheet_url", "")
-    saved_schema = user_prefs.get("default_schema", "Age, Gender, Organism")
+    # 1. PULL MASTER PROFILE FROM CLOUD ONCE PER SESSION
+    if "profile_loaded" not in st.session_state:
+        with st.spinner("Connecting to secure profile..."):
+            cloud_profile = sync_user_profile(username, mode="pull")
+            
+            if cloud_profile:
+                st.session_state.target_sheet_url = cloud_profile.get("Target_Sheet_URL", "")
+                st.session_state.schema_input = cloud_profile.get("Schema", "Age, Gender, Organism")
+                st.session_state.user_prompt = cloud_profile.get("Prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents.")
+                st.session_state.abbreviations = cloud_profile.get("Abbreviations", "")
+                st.session_state.extra_rules = cloud_profile.get("Extra_Rules", "")
+                st.session_state.anti_rules = cloud_profile.get("Anti_Rules", "")
+            else:
+                # First time login defaults
+                st.session_state.target_sheet_url = ""
+                st.session_state.schema_input = "Age, Gender, Organism"
+                st.session_state.user_prompt = "You are an expert clinical researcher. Extract structured medical data from the provided documents."
+                st.session_state.abbreviations = ""
+                st.session_state.extra_rules = ""
+                st.session_state.anti_rules = ""
+                
+            st.session_state.profile_loaded = True
 
-    if "schema_input" not in st.session_state:
-        st.session_state.schema_input = saved_schema
-
+    # 2. PULL PATIENT DATABASE
     if "master_database" not in st.session_state:
         st.session_state.master_database = pd.DataFrame()
-        if saved_sheet_url and username:
+        if st.session_state.target_sheet_url:
             try:
-                pulled_df = sync_with_google_sheets(pd.DataFrame(), saved_sheet_url, username, mode="pull")
+                pulled_df = sync_with_google_sheets(pd.DataFrame(), st.session_state.target_sheet_url, username, mode="pull")
                 st.session_state.master_database = pulled_df
-                if not pulled_df.empty:
-                    pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
-                    if pulled_cols:
-                        st.session_state.schema_input = ", ".join(pulled_cols)
             except Exception as e:
                 st.error(f"Background sync failed to connect to Google Sheets: {e}") 
 
@@ -243,17 +302,13 @@ elif auth_status == True:
         st.divider()
         
         st.header("1. Processing Engine")
-        selected_model = st.selectbox(
-            "Model Selection:", 
-            ["Google Gemini", "Groq (Llama 4 Vision)"],
-            help="Gemini: Deep reasoning. Groq: High speed."
-        )
+        selected_model = st.selectbox("Model Selection:", ["Google Gemini", "Groq (Llama 4 Vision)"])
         st.divider()
         
         st.header("2. Database Connection")
-        user_sheet_url = st.text_input("Google Sheet URL:", saved_sheet_url)
+        active_sheet_url = st.text_input("Google Sheet URL:", value=st.session_state.target_sheet_url)
+        st.session_state.target_sheet_url = active_sheet_url
         project_tab = username 
-        st.caption(f"Active Directory: {project_tab}")
         
         st.divider()
         
@@ -266,37 +321,31 @@ elif auth_status == True:
         col_pull, col_push = st.columns(2)
         with col_pull:
             if st.button("Pull Schema", use_container_width=True):
-                if user_sheet_url and project_tab:
+                if active_sheet_url:
                     with st.spinner("Synchronizing..."):
                         try:
-                            sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                            sheet = get_google_sheet_client().open_by_url(active_sheet_url).worksheet(project_tab)
                             cloud_headers = sheet.row_values(1)
                             if cloud_headers:
                                 clean_headers = [c for c in cloud_headers if c.lower() != 'system_id']
                                 st.session_state.safe_schema_val = ", ".join(clean_headers)
                                 st.toast("Schema pulled successfully.")
                                 st.rerun()
-                            else:
-                                st.toast("Target sheet is empty.")
                         except Exception as e:
                             st.toast(f"Sync error: {e}")
-                else:
-                    st.toast("Database connection required.")
 
         with col_push:
             if st.button("Push Schema", use_container_width=True):
-                if user_sheet_url and project_tab:
+                if active_sheet_url:
                     with st.spinner("Synchronizing..."):
                         try:
-                            sheet = get_google_sheet_client().open_by_url(user_sheet_url).worksheet(project_tab)
+                            sheet = get_google_sheet_client().open_by_url(active_sheet_url).worksheet(project_tab)
                             current_cols = [c.strip() for c in st.session_state.safe_schema_val.split(',') if c.strip()]
                             final_headers = ['System_ID'] + [c for c in current_cols if c.lower() != 'system_id']
                             sheet.update(range_name="A1", values=[final_headers]) 
                             st.toast("Schema pushed successfully.")
                         except Exception as e:
                             st.toast(f"Sync error: {e}")
-                else:
-                    st.toast("Database connection required.")
         
         updated_schema = st.text_input("Define Schema Columns:", value=st.session_state.safe_schema_val)
         st.session_state.safe_schema_val = updated_schema
@@ -307,31 +356,33 @@ elif auth_status == True:
         st.header("4. Extraction Logic")
         st.session_state.user_prompt = st.text_area(
             "Primary Directive", 
-            value=st.session_state.get("user_prompt", "You are an expert clinical researcher. Extract structured medical data from the provided documents.")
+            value=st.session_state.user_prompt
         )
         
         with st.expander("Advanced Extraction Constraints"):
-            st.session_state.abbreviations = st.text_area(
-                "Abbreviations Map", 
-                value=st.session_state.get("abbreviations", ""), 
-                placeholder="DM → Diabetes Mellitus\nHTN → Hypertension\nS → Sensitive\nR → Resistant"
-            )
-            st.session_state.extra_rules = st.text_area(
-                "Inclusion Rules", 
-                value=st.session_state.get("extra_rules", ""), 
-                placeholder="- Prefer lab-confirmed values\n- Use latest value if multiple present\n- Ignore illegible text"
-            )
-            st.session_state.anti_rules = st.text_area(
-                "Exclusion Rules", 
-                value=st.session_state.get("anti_rules", ""), 
-                placeholder="- Do not hallucinate values\n- Do not infer missing data"
-            )
+            st.session_state.abbreviations = st.text_area("Abbreviations Map", value=st.session_state.abbreviations)
+            st.session_state.extra_rules = st.text_area("Inclusion Rules", value=st.session_state.extra_rules)
+            st.session_state.anti_rules = st.text_area("Exclusion Rules", value=st.session_state.anti_rules)
+        
+        # --- THE MASTER SAVE BUTTON ---
+        if st.button("💾 Save Profile Configuration", type="primary", use_container_width=True):
+            with st.spinner("Updating Central Directory..."):
+                profile_dict = {
+                    "Target_Sheet_URL": st.session_state.target_sheet_url,
+                    "Schema": st.session_state.schema_input,
+                    "Prompt": st.session_state.user_prompt,
+                    "Abbreviations": st.session_state.abbreviations,
+                    "Extra_Rules": st.session_state.extra_rules,
+                    "Anti_Rules": st.session_state.anti_rules
+                }
+                sync_user_profile(username, mode="push", profile_data=profile_dict)
+                st.success("Profile saved permanently!")
         
         st.divider()
         st.header("5. System Controls")
         with st.expander("System Reset"):
             st.warning("Warning: This action clears all unsaved local data.")
-            if st.button("Purge Local Cache", type="primary", use_container_width=True):
+            if st.button("Purge Local Cache", use_container_width=True):
                 st.session_state.master_database = pd.DataFrame()
                 st.rerun()
 
@@ -547,7 +598,7 @@ elif auth_status == True:
                     missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
                     if missing_ids.any():
                         st.error(f"Validation Error: {missing_ids.sum()} record(s) lack a System_ID.")
-                    elif not user_sheet_url or not project_tab:
+                    elif not active_sheet_url or not project_tab:
                         st.error("Database connection parameters missing.")
                     else:
                         with st.spinner("Committing to Google servers..."):
@@ -557,7 +608,7 @@ elif auth_status == True:
                                     if col not in st.session_state.master_database.columns:
                                         st.session_state.master_database[col] = 'N/A'
                                 st.session_state.master_database = st.session_state.master_database[final_cols]
-                                sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
+                                sync_with_google_sheets(st.session_state.master_database, active_sheet_url, project_tab, mode="push")
                                 st.toast("Cloud commit successful.")
                                 st.rerun()
                             except Exception as e:
@@ -565,16 +616,12 @@ elif auth_status == True:
         with col_y:
             if st.button("Pull from Cloud", use_container_width=True):
                 with st.spinner("Downloading database instance..."):
-                    if not user_sheet_url or not project_tab:
+                    if not active_sheet_url or not project_tab:
                         st.error("Database connection parameters missing.")
                     else:
                         try:
-                            pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                            pulled_df = sync_with_google_sheets(pd.DataFrame(), active_sheet_url, project_tab, mode="pull")
                             st.session_state.master_database = pulled_df
-                            if not pulled_df.empty:
-                                pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
-                                if pulled_cols:
-                                    st.session_state.schema_input = ", ".join(pulled_cols)
                             st.toast("Local cache synchronized with cloud.")
                             st.rerun()
                         except Exception as e:
