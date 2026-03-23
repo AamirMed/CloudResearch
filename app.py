@@ -435,4 +435,192 @@ elif auth_status == True:
                 for i, image_bytes in enumerate(ready_images):
                     with st.spinner(f"Analyzing structure on page {i+1}..."):
                         roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object in the array."
-                        raw_json = blueprint
+                        raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, roster_prompt, selected_model)
+                        try:
+                            ai_data_list = json.loads(raw_json)
+                        except json.JSONDecodeError:
+                            continue
+                            
+                        if isinstance(ai_data_list, dict):
+                            ai_data_list = [ai_data_list]
+                            
+                        for patient_data in ai_data_list:
+                            filtered_data = {col: str(patient_data.get(col, patient_data.get(f"{col}:", 'N/A'))).strip() for col in expected_cols}
+                            if any(val not in ['N/A', 'nan', '', 'None'] for val in filtered_data.values()):
+                                patient_dfs.append(pd.DataFrame([filtered_data]))
+                
+                if patient_dfs:
+                    current_batch_df = pd.concat(patient_dfs, ignore_index=True)
+                    existing_db_ids = set()
+                    if not st.session_state.master_database.empty and 'System_ID' in st.session_state.master_database.columns:
+                        existing_db_ids = set(st.session_state.master_database['System_ID'].astype(str).tolist())
+                    
+                    new_ids = []
+                    for _ in range(len(current_batch_df)):
+                        nid = generate_unique_id(existing_db_ids)
+                        new_ids.append(nid)
+                        existing_db_ids.add(nid)
+
+                    current_batch_df.insert(0, "System_ID", new_ids)
+                    
+                    if not st.session_state.master_database.empty:
+                        st.session_state.master_database = pd.concat([st.session_state.master_database, current_batch_df], ignore_index=True)
+                    else:
+                        st.session_state.master_database = current_batch_df
+                    st.success(f"Batch processing complete. Extracted {len(current_batch_df)} records.")
+
+        elif "Update Existing" in entry_mode:
+            st.info("Append new documentation to an existing System_ID.")
+            with st.form("update_form", clear_on_submit=True):
+                col1, col2 = st.columns([1, 2])
+                with col1:
+                    target_id = st.text_input("System_ID Reference:", placeholder="CR-XXXX")
+                with col2:
+                    update_files = st.file_uploader("Upload Appendices:", type=['png', 'jpg', 'jpeg', 'pdf'], accept_multiple_files=True)
+                update_submitted = st.form_submit_button(f"Update Record via {selected_model.split(' ')[0]}", type="primary")
+
+            if update_submitted:
+                if not target_id:
+                    st.error("System_ID reference is required.")
+                elif st.session_state.master_database.empty or target_id not in st.session_state.master_database['System_ID'].values:
+                    st.error(f"System_ID '{target_id}' not found in local cache. Synchronize with cloud first.")
+                elif not update_files:
+                    st.error("Documentation upload required.")
+                else:
+                    final_prompt = build_final_prompt(
+                        st.session_state.user_prompt,
+                        st.session_state.abbreviations,
+                        st.session_state.extra_rules,
+                        st.session_state.anti_rules
+                    )
+
+                    with st.spinner("Pre-processing documents..."):
+                        ready_images = []
+                        for file in update_files:
+                            if file.name.lower().endswith('.pdf'):
+                                ready_images.extend(convert_pdf_to_images(file.getvalue()))
+                            else:
+                                ready_images.append(file.getvalue())
+
+                    for i, image_bytes in enumerate(ready_images):
+                        with st.spinner(f"Extracting updates from page {i+1}..."):
+                            raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
+                            try:
+                                ai_data = json.loads(raw_json)
+                            except json.JSONDecodeError:
+                                continue
+
+                            if isinstance(ai_data, list) and len(ai_data) > 0:
+                                ai_data = ai_data[0] 
+                            elif isinstance(ai_data, dict):
+                                pass
+                            else:
+                                ai_data = {}
+                            
+                            idx = st.session_state.master_database.index[st.session_state.master_database['System_ID'] == target_id].tolist()[0]
+                            for col in expected_cols:
+                                new_val = str(ai_data.get(col, 'N/A')).strip()
+                                if new_val not in ['N/A', 'nan', '', 'None']: 
+                                    st.session_state.master_database.at[idx, col] = new_val
+                            st.success(f"Record {target_id} updated successfully.")
+
+        if not st.session_state.master_database.empty:
+            st.divider()
+            st.subheader("Data Verification Table")
+            st.caption("Manual correction interface prior to cloud commit.")
+            st.session_state.master_database = st.data_editor(
+                st.session_state.master_database, 
+                num_rows="dynamic", 
+                use_container_width=True,
+                key="data_verifier"
+            )
+
+        st.divider()
+        st.subheader("Cloud Synchronization")
+        col_x, col_y, col_z = st.columns([1, 1, 1])
+
+        with col_x:
+            if st.button("Commit to Cloud", type="primary", use_container_width=True):
+                if st.session_state.master_database.empty:
+                    st.warning("Local cache is empty. Commit aborted.")
+                else:
+                    missing_ids = st.session_state.master_database['System_ID'].astype(str).str.strip().isin(['', 'nan', 'None', 'N/A'])
+                    if missing_ids.any():
+                        st.error(f"Validation Error: {missing_ids.sum()} record(s) lack a System_ID.")
+                    elif not user_sheet_url or not project_tab:
+                        st.error("Database connection parameters missing.")
+                    else:
+                        with st.spinner("Committing to Google servers..."):
+                            try:
+                                final_cols = ['System_ID'] + [c for c in expected_cols if c.lower() != 'system_id']
+                                for col in final_cols:
+                                    if col not in st.session_state.master_database.columns:
+                                        st.session_state.master_database[col] = 'N/A'
+                                st.session_state.master_database = st.session_state.master_database[final_cols]
+                                sync_with_google_sheets(st.session_state.master_database, user_sheet_url, project_tab, mode="push")
+                                st.toast("Cloud commit successful.")
+                                st.rerun()
+                            except Exception as e:
+                                st.error(f"Commit failed: {e}")
+        with col_y:
+            if st.button("Pull from Cloud", use_container_width=True):
+                with st.spinner("Downloading database instance..."):
+                    if not user_sheet_url or not project_tab:
+                        st.error("Database connection parameters missing.")
+                    else:
+                        try:
+                            pulled_df = sync_with_google_sheets(pd.DataFrame(), user_sheet_url, project_tab, mode="pull")
+                            st.session_state.master_database = pulled_df
+                            if not pulled_df.empty:
+                                pulled_cols = [c for c in pulled_df.columns if c.lower() != 'system_id']
+                                if pulled_cols:
+                                    st.session_state.schema_input = ", ".join(pulled_cols)
+                            st.toast("Local cache synchronized with cloud.")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Sync failed: {e}")
+        with col_z:
+            if not st.session_state.master_database.empty:
+                csv_data = st.session_state.master_database.to_csv(index=False).encode('utf-8')
+                st.download_button("Export Local CSV", data=csv_data, file_name=f"{project_tab}_export.csv", mime="text/csv", use_container_width=True)
+
+    # ==========================================
+    # TAB 2: DYNAMIC DATA EXPLORER
+    # ==========================================
+    with tabs[1]:
+        st.subheader("Data Explorer")
+        
+        if st.session_state.master_database.empty:
+            st.info("Synchronize with cloud or process records to enable analytics.")
+        else:
+            df = st.session_state.master_database.copy()
+            
+            for col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+                if df[col].dtype == 'object':
+                    df[col] = df[col].astype(str).str.strip().str.upper()
+                    df[col] = df[col].replace({'N/A': 'N/A', 'NAN': 'N/A', 'NONE': 'N/A', '': 'N/A'})
+            
+            all_columns = df.columns.tolist()
+            col1, col2 = st.columns(2)
+            with col1:
+                x_axis = st.selectbox("Categorical Axis (X)", all_columns)
+            with col2:
+                y_axis = st.selectbox("Numerical Axis (Y)", all_columns)
+
+            chart_type = st.radio("Visualization Form", ["Bar", "Pie", "Scatter"], horizontal=True)
+
+            try:
+                clean_chart_df = df[~df[x_axis].isin(['N/A'])]
+                clean_chart_df = clean_chart_df[~clean_chart_df[y_axis].isin(['N/A'])]
+
+                if chart_type == "Bar":
+                    fig = px.bar(clean_chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
+                elif chart_type == "Pie":
+                    fig = px.pie(clean_chart_df, names=x_axis, title=f"Distribution of {x_axis}")
+                else:
+                    fig = px.scatter(clean_chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
+
+                st.plotly_chart(fig, use_container_width=True)
+            except Exception as e:
+                st.warning("Visualization failed. Ensure the selected Y-axis contains continuous numerical data.")
