@@ -23,7 +23,7 @@ if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ============================================================
-# CLOUDRESEARCH — PRECISION DARK UI SYSTEM
+# CLOUDRESEARCH -- PRECISION DARK UI SYSTEM
 # Typography: IBM Plex Sans (body) + Syne (display)
 # Palette: Deep navy base, electric teal accent, slate surfaces
 # ============================================================
@@ -33,7 +33,7 @@ st.markdown("""
 
 <style>
 
-/* ── ROOT VARIABLES ───────────────────────────────────────── */
+/* -- ROOT VARIABLES ----------------------------------------- */
 :root {
     --bg:          #07090F;
     --surface:     #0D1119;
@@ -56,7 +56,7 @@ st.markdown("""
     --radius-lg:   10px;
 }
 
-/* ── GLOBAL RESET ─────────────────────────────────────────── */
+/* -- GLOBAL RESET ------------------------------------------- */
 html, body, [class*="css"] {
     font-family: var(--font-sans) !important;
     background-color: var(--bg) !important;
@@ -71,7 +71,7 @@ html, body, [class*="css"] {
 #MainMenu, footer, header { visibility: hidden; }
 .stDeployButton { display: none; }
 
-/* ── ANIMATED TOP STRIPE ──────────────────────────────────── */
+/* -- ANIMATED TOP STRIPE ------------------------------------ */
 .stApp::before {
     content: '';
     position: fixed;
@@ -87,7 +87,7 @@ html, body, [class*="css"] {
     100% { background-position: -100% 0; }
 }
 
-/* ── SIDEBAR ──────────────────────────────────────────────── */
+/* -- SIDEBAR ------------------------------------------------ */
 [data-testid="stSidebar"] {
     background-color: var(--surface) !important;
     border-right: 1px solid var(--border) !important;
@@ -125,7 +125,7 @@ html, body, [class*="css"] {
     border-bottom: 1px solid var(--border) !important;
 }
 
-/* ── MAIN HEADINGS ────────────────────────────────────────── */
+/* -- MAIN HEADINGS ------------------------------------------ */
 .stApp h1 {
     font-family: var(--font-display) !important;
     font-size: 1.6rem !important;
@@ -155,7 +155,7 @@ html, body, [class*="css"] {
     margin-bottom: 0.5rem !important;
 }
 
-/* ── TABS ─────────────────────────────────────────────────── */
+/* -- TABS --------------------------------------------------- */
 [data-testid="stTabs"] {
     border-bottom: 1px solid var(--border) !important;
     margin-bottom: 1.5rem !important;
@@ -191,7 +191,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
     background-color: var(--border) !important;
 }
 
-/* ── INPUTS & TEXT AREAS ──────────────────────────────────── */
+/* -- INPUTS & TEXT AREAS ------------------------------------ */
 [data-testid="stTextInput"] input,
 [data-testid="stTextArea"] textarea,
 [data-baseweb="select"] > div:first-child {
@@ -222,7 +222,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
     margin-bottom: 0.3rem !important;
 }
 
-/* ── SELECTBOX ────────────────────────────────────────────── */
+/* -- SELECTBOX ---------------------------------------------- */
 [data-baseweb="select"] * {
     background-color: var(--panel) !important;
     color: var(--text-hi) !important;
@@ -244,7 +244,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
     background-color: var(--accent-dim) !important;
 }
 
-/* ── BUTTONS ──────────────────────────────────────────────── */
+/* -- BUTTONS ------------------------------------------------ */
 [data-testid="stButton"] button {
     background-color: var(--panel) !important;
     color: var(--text-hi) !important;
@@ -320,7 +320,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
     color: var(--blue) !important;
 }
 
-/* ── RADIO BUTTONS ────────────────────────────────────────── */
+/* -- RADIO BUTTONS ------------------------------------------ */
 [data-testid="stRadio"] label {
     font-family: var(--font-sans) !important;
     font-size: 0.82rem !important;
@@ -345,7 +345,7 @@ button[data-baseweb="tab"][aria-selected="true"] {
     background: var(--accent-dim) !important;
 }
 
-/* ── ALERT BOXES ──────────────────────────────────────────── */
+/* -- ALERT BOXES -------------------------------------------- */
 [data-testid="stAlert"] {
     border-radius: var(--radius) !important;
     border-left-width: 3px !important;
@@ -382,7 +382,7 @@ div[data-testid="stAlert"][class*="error"] {
     color: #FF9EB4 !important;
 }
 
-/* ── EXPANDER ─────────────────────────────────────────────── */
+/* -- EXPANDER ----------------------------------------------- */
 [data-testid="stExpander"] {
     background-color: var(--surface) !important;
     border: 1px solid var(--border) !important;
@@ -408,7 +408,7 @@ div[data-testid="stAlert"][class*="error"] {
     fill: var(--text-lo) !important;
 }
 
-/* ── FILE UPLOADER ────────────────────────────────────────── */
+/* -- FILE UPLOADER ------------------------------------------ */
 [data-testid="stFileUploader"] {
     background-color: var(--surface) !important;
     border: 1.5px dashed var(--border-lit) !important;
@@ -431,8 +431,8 @@ div[data-testid="stAlert"][class*="error"] {
     font-size: 0.78rem !important;
 }
 
-/* ── DATA EDITOR / TABLE ──────────────────────────────────── */
-/* glide-data-grid renders on canvas — CSS cannot style cells.
+/* -- DATA EDITOR / TABLE ------------------------------------ */
+/* glide-data-grid renders on canvas -- CSS cannot style cells.
    Solution: give the wrapper a light background so the grid's 
    internal dark text is always readable against it.           */
 [data-testid="stDataEditor"] {
@@ -468,7 +468,7 @@ div[data-testid="stAlert"][class*="error"] {
     overflow: hidden !important;
 }
 
-/* ── SPINNER ──────────────────────────────────────────────── */
+/* -- SPINNER ------------------------------------------------ */
 [data-testid="stSpinner"] {
     font-family: var(--font-sans) !important;
     font-size: 0.82rem !important;
@@ -479,7 +479,7 @@ div[data-testid="stAlert"][class*="error"] {
     color: var(--accent) !important;
 }
 
-/* ── TOAST ────────────────────────────────────────────────── */
+/* -- TOAST -------------------------------------------------- */
 [data-testid="stToast"] {
     background-color: var(--panel) !important;
     border: 1px solid var(--border-lit) !important;
@@ -490,14 +490,14 @@ div[data-testid="stAlert"][class*="error"] {
     box-shadow: 0 8px 24px rgba(0,0,0,0.4) !important;
 }
 
-/* ── DIVIDER ──────────────────────────────────────────────── */
+/* -- DIVIDER ------------------------------------------------ */
 hr {
     border: none !important;
     border-top: 1px solid var(--border) !important;
     margin: 1.5rem 0 !important;
 }
 
-/* ── CAPTION & SMALL TEXT ─────────────────────────────────── */
+/* -- CAPTION & SMALL TEXT ----------------------------------- */
 [data-testid="stCaptionContainer"] {
     font-family: var(--font-sans) !important;
     font-size: 0.72rem !important;
@@ -505,7 +505,7 @@ hr {
     letter-spacing: 0.02em !important;
 }
 
-/* ── SIDEBAR SESSION STATUS ───────────────────────────────── */
+/* -- SIDEBAR SESSION STATUS --------------------------------- */
 [data-testid="stSidebar"] .stSuccess {
     background: var(--accent-dim) !important;
     border-color: var(--accent) !important;
@@ -517,7 +517,7 @@ hr {
     padding: 0.5rem 0.8rem !important;
 }
 
-/* ── FORM CONTAINER ───────────────────────────────────────── */
+/* -- FORM CONTAINER ----------------------------------------- */
 [data-testid="stForm"] {
     background: var(--surface) !important;
     border: 1px solid var(--border) !important;
@@ -525,13 +525,13 @@ hr {
     padding: 1.2rem !important;
 }
 
-/* ── SCROLLBAR ────────────────────────────────────────────── */
+/* -- SCROLLBAR ---------------------------------------------- */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
 ::-webkit-scrollbar-thumb { background: var(--border-lit); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-lo); }
 
-/* ── METRIC CARDS ─────────────────────────────────────────── */
+/* -- METRIC CARDS ------------------------------------------- */
 [data-testid="stMetric"] {
     background: var(--surface) !important;
     border: 1px solid var(--border) !important;
@@ -554,19 +554,19 @@ hr {
     color: var(--text-hi) !important;
 }
 
-/* ── CHECKBOX ─────────────────────────────────────────────── */
+/* -- CHECKBOX ----------------------------------------------- */
 [data-testid="stCheckbox"] label {
     font-size: 0.82rem !important;
     color: var(--text-md) !important;
     font-family: var(--font-sans) !important;
 }
 
-/* ── PLOTLY CHARTS ────────────────────────────────────────── */
+/* -- PLOTLY CHARTS ------------------------------------------ */
 .js-plotly-plot .plotly {
     background: transparent !important;
 }
 
-/* ── CUSTOM SECTION LABEL ─────────────────────────────────── */
+/* -- CUSTOM SECTION LABEL ----------------------------------- */
 .section-label {
     font-family: var(--font-sans);
     font-size: 0.68rem;
@@ -578,18 +578,18 @@ hr {
     margin-top: 0.5rem;
 }
 
-/* ── COLUMN LAYOUT TWEAKS ─────────────────────────────────── */
+/* -- COLUMN LAYOUT TWEAKS ----------------------------------- */
 [data-testid="column"] {
     padding: 0 0.4rem !important;
 }
 
-/* ── MAIN CONTENT PADDING ─────────────────────────────────── */
+/* -- MAIN CONTENT PADDING ----------------------------------- */
 .block-container {
     padding: 2rem 2.5rem 3rem !important;
     max-width: 1400px !important;
 }
 
-/* ── TITLE BADGE ──────────────────────────────────────────── */
+/* -- TITLE BADGE -------------------------------------------- */
 .cr-title-row {
     display: flex;
     align-items: center;
@@ -613,7 +613,7 @@ hr {
     margin-left: 0.4rem;
 }
 
-/* ── ID PILL STYLE ────────────────────────────────────────── */
+/* -- ID PILL STYLE ------------------------------------------ */
 .id-pill {
     font-family: var(--font-mono);
     font-size: 0.78rem;
@@ -625,7 +625,7 @@ hr {
     letter-spacing: 0.05em;
 }
 
-/* ── STATUS DOT ───────────────────────────────────────────── */
+/* -- STATUS DOT --------------------------------------------- */
 .status-dot {
     width: 6px; height: 6px;
     border-radius: 50%;
@@ -640,7 +640,7 @@ hr {
     50% { opacity: 0.4; }
 }
 
-/* ── SIDEBAR LOGO MARK ────────────────────────────────────── */
+/* -- SIDEBAR LOGO MARK -------------------------------------- */
 .sidebar-logo {
     display: flex;
     align-items: center;
@@ -666,4 +666,3 @@ hr {
 }
 
 .sidebar-wordmark {
- 
