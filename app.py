@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import streamlit as st
 import streamlit_authenticator as stauth
 import pandas as pd
@@ -17,7 +18,7 @@ import io
 import plotly.express as px
 
 # --- 1. UI SETUP & GLOBAL CONFIG ---
-st.set_page_config(page_title="CloudResearch", layout="wide", page_icon="🔬")
+st.set_page_config(page_title="CloudResearch", layout="wide", page_icon=None)
 
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
@@ -662,7 +663,4 @@ hr {
     color: var(--accent);
     font-weight: 700;
     font-family: var(--font-mono);
-    flex-shrink: 0;
-}
-
-.sidebar-wordmark {
+    flex-shrink: 0
