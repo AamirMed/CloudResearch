@@ -9,8 +9,7 @@ import random
 import string
 import time # Added for Rate Limit Throttling
 from groq import Groq
-from openai import OpenAI # Added for OpenAI and Together AI
-from anthropic import Anthropic # Added for Claude
+from openai import OpenAI # Universal remote for OpenAI, OpenRouter (Llama & Qwen)
 import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -150,9 +149,11 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
 
 def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
-    if img.mode != 'RGB':
-        img = img.convert('RGB')
-    img.thumbnail((2048, 2048)) 
+    
+    # TOKEN DIET: Grayscale Conversion + Resolution Reduction
+    img = img.convert('L') 
+    img.thumbnail((1024, 1024)) 
+    
     output = io.BytesIO()
     img.save(output, format="JPEG", quality=85)
     return output.getvalue()
@@ -231,19 +232,24 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
             parsed = json.loads(response.choices[0].message.content)
             raw_output = json.dumps(parsed.get("data", []))
 
-        elif "Anthropic" in model_choice:
-            client = Anthropic(api_key=st.secrets.get("ANTHROPIC_API_KEY", ""))
-            response = client.messages.create(
-                model="claude-3-haiku-20240307",
-                max_tokens=2000,
-                messages=[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_image}}, {"type": "text", "text": full_prompt}]}]
+        elif "Llama" in model_choice and "OpenRouter" in model_choice:
+            client = OpenAI(
+                api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
+                base_url="https://openrouter.ai/api/v1"
             )
-            raw_output = response.content[0].text.strip()
-
-        elif "Together" in model_choice:
-            client = OpenAI(api_key=st.secrets.get("TOGETHER_API_KEY", ""), base_url="https://api.together.xyz/v1")
             response = client.chat.completions.create(
-                model="meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
+                model="meta-llama/llama-3.2-90b-vision-instruct:free",
+                messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+            )
+            raw_output = response.choices[0].message.content.strip()
+
+        elif "Qwen" in model_choice and "OpenRouter" in model_choice:
+            client = OpenAI(
+                api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
+                base_url="https://openrouter.ai/api/v1"
+            )
+            response = client.chat.completions.create(
+                model="qwen/qwen-2-vl-72b-instruct:free",
                 messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
             raw_output = response.choices[0].message.content.strip()
@@ -338,15 +344,15 @@ elif auth_status == True:
         
         st.header("1. Processing Engine")
         
-        # --- NEW 5-MODEL SELECTOR ---
+        # --- THE UPDATED 5-MODEL SELECTOR ---
         selected_model = st.selectbox(
             "Model Selection:", 
             [
                 "Google Gemini (Flash)", 
                 "Groq (Llama Vision)", 
-                "Anthropic (Claude 3 Haiku)", 
-                "OpenAI (GPT-4o-Mini)", 
-                "Together AI (Free Llama)"
+                "OpenRouter (Free Meta Llama)", 
+                "OpenRouter (Free Qwen Vision)", 
+                "OpenAI (GPT-4o-Mini)"
             ]
         )
         st.divider()
