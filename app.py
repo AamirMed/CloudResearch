@@ -686,4 +686,3 @@ elif auth_status == True:
                 st.plotly_chart(fig, use_container_width=True)
             except Exception as e:
                 st.warning("Visualization failed. Ensure the selected Y-axis contains continuous numerical data.")
-add the ui to this code
