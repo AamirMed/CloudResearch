@@ -7,7 +7,10 @@ import json
 import re
 import random
 import string
+import time # Added for Rate Limit Throttling
 from groq import Groq
+from openai import OpenAI # Added for OpenAI and Together AI
+from anthropic import Anthropic # Added for Claude
 import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -47,7 +50,7 @@ def generate_unique_id(existing_ids):
         if new_id not in existing_ids:
             return new_id
 
-# --- NEW: MASTER ADMIN DIRECTORY ENGINE ---
+# --- MASTER ADMIN DIRECTORY ENGINE ---
 def sync_user_profile(username, mode="pull", profile_data=None):
     admin_url = st.secrets.get("ADMIN_SHEET_URL", "")
     if not admin_url:
@@ -192,39 +195,72 @@ Use "N/A" if missing.
 """
     return final_prompt
 
+# --- THE NEW 5-MODEL BLUEPRINT DECODER ---
 def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     full_prompt = f"{final_prompt}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If you cannot read the image, output an empty array []."
     
-    if "Gemini" in model_choice:
-        compressed_bytes = compress_image(image_bytes)
-        img = Image.open(io.BytesIO(compressed_bytes))
+    compressed_bytes = compress_image(image_bytes)
+    base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
+    
+    raw_output = ""
+    
+    try:
+        if "Gemini" in model_choice:
+            img = Image.open(io.BytesIO(compressed_bytes))
+            gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
+            model = genai.GenerativeModel(gemini_model_name)
+            response = model.generate_content([full_prompt, img], generation_config={"response_mime_type": "application/json"})
+            raw_output = response.text.strip()
             
-        gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
-        model = genai.GenerativeModel(gemini_model_name)
-        
-        response = model.generate_content(
-            [full_prompt, img],
-            generation_config={"response_mime_type": "application/json"}
-        )
-        return response.text.strip()
-        
-    else:
-        client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-        compressed_bytes = compress_image(image_bytes)
-        base64_image = base64.b64encode(compressed_bytes).decode('utf-8')
-        groq_prompt = full_prompt + " ONLY output the raw JSON array."
-        
-        response = client.chat.completions.create(
-            model="meta-llama/llama-4-scout-17b-16e-instruct", 
-            messages=[{"role": "user", "content": [{"type": "text", "text": groq_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
-        )
-        raw_output = response.choices[0].message.content.strip()
+        elif "Groq" in model_choice:
+            client = Groq(api_key=st.secrets.get("GROQ_API_KEY", ""))
+            groq_prompt = full_prompt + " ONLY output the raw JSON array."
+            response = client.chat.completions.create(
+                model="llama-3.2-90b-vision-preview", 
+                messages=[{"role": "user", "content": [{"type": "text", "text": groq_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+            )
+            raw_output = response.choices[0].message.content.strip()
+
+        elif "OpenAI" in model_choice:
+            client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
+            response = client.chat.completions.create(
+                model="gpt-4o-mini",
+                response_format={ "type": "json_object" },
+                messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt + " Wrap the array in a JSON object with the key 'data'."}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+            )
+            parsed = json.loads(response.choices[0].message.content)
+            raw_output = json.dumps(parsed.get("data", []))
+
+        elif "Anthropic" in model_choice:
+            client = Anthropic(api_key=st.secrets.get("ANTHROPIC_API_KEY", ""))
+            response = client.messages.create(
+                model="claude-3-haiku-20240307",
+                max_tokens=2000,
+                messages=[{"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": base64_image}}, {"type": "text", "text": full_prompt}]}]
+            )
+            raw_output = response.content[0].text.strip()
+
+        elif "Together" in model_choice:
+            client = OpenAI(api_key=st.secrets.get("TOGETHER_API_KEY", ""), base_url="https://api.together.xyz/v1")
+            response = client.chat.completions.create(
+                model="meta-llama/Llama-3.2-90B-Vision-Instruct-Turbo",
+                messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
+            )
+            raw_output = response.choices[0].message.content.strip()
+
+        # Universal JSON cleaner 
         if "```json" in raw_output:
             raw_output = raw_output.split("```json")[1]
         if "```" in raw_output:
             raw_output = raw_output.split("```")[0]
+            
         match = re.search(r'(\[.*\]|\{.*\})', raw_output.strip(), re.DOTALL)
         return match.group(1) if match else raw_output.strip()
+
+    except Exception as e:
+        st.error(f"{model_choice} Connection Error: Please verify your API keys in the secrets file. Details: {e}")
+        return "[]"
+
 
 # --- 3. AUTHENTICATION GATEKEEPER ---
 try:
@@ -276,7 +312,6 @@ elif auth_status == True:
                 st.session_state.extra_rules = cloud_profile.get("Extra_Rules", "")
                 st.session_state.anti_rules = cloud_profile.get("Anti_Rules", "")
             else:
-                # First time login defaults
                 st.session_state.target_sheet_url = ""
                 st.session_state.schema_input = "Age, Gender, Organism"
                 st.session_state.user_prompt = "You are an expert clinical researcher. Extract structured medical data from the provided documents."
@@ -302,7 +337,18 @@ elif auth_status == True:
         st.divider()
         
         st.header("1. Processing Engine")
-        selected_model = st.selectbox("Model Selection:", ["Google Gemini", "Groq (Llama 4 Vision)"])
+        
+        # --- NEW 5-MODEL SELECTOR ---
+        selected_model = st.selectbox(
+            "Model Selection:", 
+            [
+                "Google Gemini (Flash)", 
+                "Groq (Llama Vision)", 
+                "Anthropic (Claude 3 Haiku)", 
+                "OpenAI (GPT-4o-Mini)", 
+                "Together AI (Free Llama)"
+            ]
+        )
         st.divider()
         
         st.header("2. Database Connection")
@@ -429,6 +475,9 @@ elif auth_status == True:
                     master_patient_data = {col: 'N/A' for col in expected_cols}
                     for image_bytes in ready_images:
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
+                        
+                        time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                        
                         try:
                             ai_data_list = json.loads(raw_json) 
                         except json.JSONDecodeError:
@@ -487,6 +536,9 @@ elif auth_status == True:
                     with st.spinner(f"Analyzing structure on page {i+1}..."):
                         roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object in the array."
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, roster_prompt, selected_model)
+                        
+                        time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                        
                         try:
                             ai_data_list = json.loads(raw_json)
                         except json.JSONDecodeError:
@@ -556,6 +608,9 @@ elif auth_status == True:
                     for i, image_bytes in enumerate(ready_images):
                         with st.spinner(f"Extracting updates from page {i+1}..."):
                             raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
+                            
+                            time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                            
                             try:
                                 ai_data = json.loads(raw_json)
                             except json.JSONDecodeError:
