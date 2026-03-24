@@ -9,7 +9,7 @@ import random
 import string
 import time # Added for Rate Limit Throttling
 from groq import Groq
-from openai import OpenAI # Universal remote for OpenAI, OpenRouter (Llama & Qwen)
+from openai import OpenAI # Universal remote for OpenAI & OpenRouter
 import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -196,7 +196,7 @@ Use "N/A" if missing.
 """
     return final_prompt
 
-# --- THE NEW 5-MODEL BLUEPRINT DECODER ---
+# --- THE NEW 4-MODEL BLUEPRINT DECODER ---
 def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     full_prompt = f"{final_prompt}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If you cannot read the image, output an empty array []."
     
@@ -232,24 +232,15 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
             parsed = json.loads(response.choices[0].message.content)
             raw_output = json.dumps(parsed.get("data", []))
 
-        elif "Llama" in model_choice and "OpenRouter" in model_choice:
+        elif "OpenRouter" in model_choice:
+            # THE FIX: This sends it to OpenRouter's permanent auto-balancer. 
+            # It will automatically find the best free vision model online right now.
             client = OpenAI(
                 api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
                 base_url="https://openrouter.ai/api/v1"
             )
             response = client.chat.completions.create(
-                model="meta-llama/llama-3.2-90b-vision-instruct:free",
-                messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
-            )
-            raw_output = response.choices[0].message.content.strip()
-
-        elif "Qwen" in model_choice and "OpenRouter" in model_choice:
-            client = OpenAI(
-                api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
-                base_url="https://openrouter.ai/api/v1"
-            )
-            response = client.chat.completions.create(
-                model="qwen/qwen-2.5-vl-7b-instruct:free",  # FIX: Updated to the stable 7B free model
+                model="openrouter/free", 
                 messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
             raw_output = response.choices[0].message.content.strip()
@@ -344,14 +335,13 @@ elif auth_status == True:
         
         st.header("1. Processing Engine")
         
-        # --- THE UPDATED 5-MODEL SELECTOR ---
+        # --- THE BULLETPROOF 4-MODEL SELECTOR ---
         selected_model = st.selectbox(
             "Model Selection:", 
             [
                 "Google Gemini (Flash)", 
                 "Groq (Llama Vision)", 
-                "OpenRouter (Free Meta Llama)", 
-                "OpenRouter (Free Qwen Vision)", 
+                "OpenRouter (Auto-Router Free)", 
                 "OpenAI (GPT-4o-Mini)"
             ]
         )
