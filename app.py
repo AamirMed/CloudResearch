@@ -233,16 +233,20 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
             raw_output = json.dumps(parsed.get("data", []))
 
         elif "OpenRouter" in model_choice:
-            # THE FIX: This sends it to OpenRouter's permanent auto-balancer. 
-            # It will automatically find the best free vision model online right now.
+            # THE FIX: Pointing to the stable 11B Vision Model and adding a safety net
             client = OpenAI(
                 api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
                 base_url="https://openrouter.ai/api/v1"
             )
             response = client.chat.completions.create(
-                model="openrouter/free", 
+                model="meta-llama/llama-3.2-11b-vision-instruct:free", 
                 messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
+            
+            # The Safety Net: Catches OpenRouter blanking out before it crashes the app
+            if not response.choices or response.choices[0].message.content is None:
+                raise ValueError("OpenRouter's server returned an empty response. The free server might be overloaded.")
+                
             raw_output = response.choices[0].message.content.strip()
 
         # Universal JSON cleaner 
@@ -341,7 +345,7 @@ elif auth_status == True:
             [
                 "Google Gemini (Flash)", 
                 "Groq (Llama Vision)", 
-                "OpenRouter (Auto-Router Free)", 
+                "OpenRouter (Free Llama 11B Vision)", 
                 "OpenAI (GPT-4o-Mini)"
             ]
         )
