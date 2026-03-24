@@ -10,4 +10,4 @@ streamlit-authenticator
 google-generativeai
 PyMuPDF
 openai
-anthropic
+
