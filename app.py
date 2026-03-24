@@ -9,7 +9,7 @@ import random
 import string
 import time # Added for Rate Limit Throttling
 from groq import Groq
-from openai import OpenAI # Universal remote for OpenAI & OpenRouter
+from openai import OpenAI 
 import google.generativeai as genai
 import gspread
 from google.oauth2.service_account import Credentials
@@ -150,12 +150,12 @@ def sync_with_google_sheets(local_dataframe, sheet_url, tab_name, mode="pull"):
 def compress_image(image_bytes):
     img = Image.open(io.BytesIO(image_bytes))
     
-    # TOKEN DIET: Grayscale Conversion + Resolution Reduction
+    # EXTREME TOKEN DIET: Grayscale + 768px + 75% Quality
     img = img.convert('L') 
-    img.thumbnail((1024, 1024)) 
+    img.thumbnail((768, 768)) 
     
     output = io.BytesIO()
-    img.save(output, format="JPEG", quality=85)
+    img.save(output, format="JPEG", quality=75)
     return output.getvalue()
 
 def convert_pdf_to_images(pdf_bytes):
@@ -168,35 +168,10 @@ def convert_pdf_to_images(pdf_bytes):
     return image_list
 
 def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
-    abbr_text = abbreviations.strip() if abbreviations.strip() else "None"
-    extra_text = extra_rules.strip() if extra_rules.strip() else "None"
-    anti_text = anti_rules.strip() if anti_rules.strip() else "- Do not hallucinate values\n- Do not guess missing data"
-    
-    final_prompt = f"""ROLE:
-You are an expert clinical data extraction system.
+    # MINIFIED PROMPT: Strips out all conversational English to save tokens.
+    return f"Task: Extract clinical data to JSON array. Prompt: {user_prompt}. Map: {abbreviations}. Rules: {extra_rules}. Avoid: {anti_rules}. Output RAW JSON array `[{{...}}]` ONLY. No markdown. Use 'N/A' for missing data."
 
-USER INSTRUCTION:
-{user_prompt}
-
-ABBREVIATIONS:
-{abbr_text}
-
-EXTRA RULES:
-- Use clinical semantic understanding
-- Expand medical abbreviations
-{extra_text}
-
-ANTI-RULES:
-{anti_text}
-
-OUTPUT REQUIREMENTS:
-Return ONLY valid JSON format.
-No explanations, markdown formatting, or conversational text.
-Use "N/A" if missing.
-"""
-    return final_prompt
-
-# --- THE NEW 4-MODEL BLUEPRINT DECODER ---
+# --- THE CLEANED UP 3-MODEL DECODER ---
 def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
     full_prompt = f"{final_prompt}\n\nREQUIRED COLUMNS (JSON KEYS): [{columns}]\n\nOutput a valid JSON ARRAY format: [{{...}}, {{...}}]. If the image contains multiple patients, create a separate JSON object for EACH patient. If you cannot read the image, output an empty array []."
     
@@ -231,23 +206,6 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
             )
             parsed = json.loads(response.choices[0].message.content)
             raw_output = json.dumps(parsed.get("data", []))
-
-        elif "OpenRouter" in model_choice:
-            # THE FIX: Pointing to the stable 11B Vision Model and adding a safety net
-            client = OpenAI(
-                api_key=st.secrets.get("OPENROUTER_API_KEY", ""), 
-                base_url="https://openrouter.ai/api/v1"
-            )
-            response = client.chat.completions.create(
-                model="meta-llama/llama-3.2-11b-vision-instruct:free", 
-                messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
-            )
-            
-            # The Safety Net: Catches OpenRouter blanking out before it crashes the app
-            if not response.choices or response.choices[0].message.content is None:
-                raise ValueError("OpenRouter's server returned an empty response. The free server might be overloaded.")
-                
-            raw_output = response.choices[0].message.content.strip()
 
         # Universal JSON cleaner 
         if "```json" in raw_output:
@@ -339,14 +297,13 @@ elif auth_status == True:
         
         st.header("1. Processing Engine")
         
-        # --- THE BULLETPROOF 4-MODEL SELECTOR ---
+        # --- THE CLEANED UP 3-MODEL SELECTOR ---
         selected_model = st.selectbox(
             "Model Selection:", 
             [
-                "Google Gemini (Flash)", 
-                "Groq (Llama Vision)", 
-                "OpenRouter (Free Llama 11B Vision)", 
-                "OpenAI (GPT-4o-Mini)"
+                "Google Gemini (Primary)", 
+                "Groq (Free Fallback)", 
+                "OpenAI (Paid Fallback)"
             ]
         )
         st.divider()
@@ -476,7 +433,8 @@ elif auth_status == True:
                     for image_bytes in ready_images:
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
                         
-                        time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                        # 4.5 SECOND THROTTLE: Mathematically prevents Gemini 429 Errors
+                        time.sleep(4.5) 
                         
                         try:
                             ai_data_list = json.loads(raw_json) 
@@ -537,7 +495,8 @@ elif auth_status == True:
                         roster_prompt = final_prompt + "\nCRITICAL: Extract EVERY subject as a separate JSON object in the array."
                         raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, roster_prompt, selected_model)
                         
-                        time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                        # 4.5 SECOND THROTTLE: Mathematically prevents Gemini 429 Errors
+                        time.sleep(4.5) 
                         
                         try:
                             ai_data_list = json.loads(raw_json)
@@ -609,7 +568,8 @@ elif auth_status == True:
                         with st.spinner(f"Extracting updates from page {i+1}..."):
                             raw_json = blueprint_decoder(image_bytes, st.session_state.schema_input, final_prompt, selected_model)
                             
-                            time.sleep(2) # <--- ADDED THROTTLE: Protects against Rate Limit crashes
+                            # 4.5 SECOND THROTTLE: Mathematically prevents Gemini 429 Errors
+                            time.sleep(4.5) 
                             
                             try:
                                 ai_data = json.loads(raw_json)
