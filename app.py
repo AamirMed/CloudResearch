@@ -249,7 +249,7 @@ def blueprint_decoder(image_bytes, columns, final_prompt, model_choice):
                 base_url="https://openrouter.ai/api/v1"
             )
             response = client.chat.completions.create(
-                model="qwen/qwen-2-vl-72b-instruct:free",
+                model="qwen/qwen2.5-vl-72b-instruct:free",  # FIX: Updated to qwen2.5
                 messages=[{"role": "user", "content": [{"type": "text", "text": full_prompt}, {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_image}"}}]}]
             )
             raw_output = response.choices[0].message.content.strip()
