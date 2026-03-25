@@ -350,7 +350,11 @@ def clear_local_cache():
 
 @st.cache_resource
 def get_google_sheet_client():
-    scope = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
+    # Updated to the modern v4 Sheets API scope
+    scope = [
+        "https://www.googleapis.com/auth/spreadsheets", 
+        "https://www.googleapis.com/auth/drive"
+    ]
     raw_creds = st.secrets["GOOGLE_CREDENTIALS"]
     clean_creds = raw_creds.strip()
     
