@@ -1,4 +1,5 @@
 import sqlite3
+import difflib
 import streamlit as st
 import streamlit_authenticator as stauth
 import pandas as pd
@@ -128,6 +129,7 @@ st.markdown("""
         h3  { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
         .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
         .stAlert { border-radius: 6px !important; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; color: #2E66F6 !important; }
         .debug-box {
             background: #1a1a2e; color: #00ff88; padding: 12px;
             border-radius: 6px; font-family: monospace; font-size: 0.8rem;
@@ -143,14 +145,12 @@ st.markdown("""
 def is_valid_value(value):
     return str(value).strip().lower() not in INVALID_VALUES
 
-
 def generate_unique_id(existing_ids):
     alphabet = string.ascii_uppercase + string.digits
     while True:
         candidate = "CR-" + "".join(random.choices(alphabet, k=4))
         if candidate not in existing_ids:
             return candidate
-
 
 def debug_log(label, content, debug_mode):
     if debug_mode:
@@ -160,34 +160,22 @@ def debug_log(label, content, debug_mode):
             unsafe_allow_html=True
         )
 
-
 def parse_ai_json_safe(raw_text):
     """
     Robustly parse AI output into a list of dicts.
     Returns (records_list, error_message_or_None).
-
-    Handles:
-    - Markdown code fences  ``` json ... ```
-    - Trailing prose after the JSON block
-    - Wrapped objects  {"data": [...]}
-    - Single dict responses
-    - Empty or completely non-JSON responses
-    - Trailing commas (common AI mistake)
     """
     if not raw_text or not raw_text.strip():
         return [], "AI returned an empty response."
 
     cleaned = raw_text.strip()
 
-    # Strip markdown code fences (FIXED REGEX BUG HERE)
+    # Strip markdown code fences (Safely formatted)
     if "```" in cleaned:
         parts      = re.split(r"`{3}(?:json)?", cleaned)
         candidates = [p.strip() for p in parts if p.strip().startswith(("[", "{"))]
         cleaned    = candidates[0] if candidates else cleaned
 
-    # Extract the FIRST complete balanced JSON structure.
-    # Character-level scan stops at the matching bracket so trailing
-    # prose (e.g. "Let me know if you need help!") never corrupts the parse.
     json_str = None
     for start_char, end_char in [("[", "]"), ("{", "}")]:
         start = cleaned.find(start_char)
@@ -219,7 +207,6 @@ def parse_ai_json_safe(raw_text):
     if not json_str:
         return [], f"No valid JSON found. Raw snippet: {cleaned[:200]}"
 
-    # Primary parse attempt; fallback strips trailing commas
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as exc:
@@ -230,7 +217,6 @@ def parse_ai_json_safe(raw_text):
             logger.warning("JSON decode failed: %s | raw: %s", exc, json_str[:300])
             return [], f"JSON parse error: {exc}"
 
-    # Unwrap common envelope patterns
     if isinstance(parsed, dict):
         for key in ("data", "records", "patients", "results", "entries", "output"):
             if key in parsed and isinstance(parsed[key], list):
@@ -242,24 +228,43 @@ def parse_ai_json_safe(raw_text):
 
     return [], f"Unexpected JSON root type: {type(parsed).__name__}"
 
-
 def normalize_record(record, expected_cols):
     """
-    Map AI-returned keys to schema columns.
-    Handles: case differences, trailing colons, spaces, underscores vs spaces.
+    Map AI-returned keys to schema columns using aggressive fuzzy matching.
+    Handles exact matches, substring matches (for units), and typo fuzzy matches.
     """
-    def normalise_key(k):
-        return re.sub(r"[\s_\-]+", "_", str(k).lower().strip().rstrip(":"))
+    def clean_key(k):
+        # Remove all spaces, underscores, hyphens, and lowercase it
+        return re.sub(r'[^a-z0-9]', '', str(k).lower())
 
-    lower_map  = {normalise_key(k): v for k, v in record.items()}
-    normalised = {}
-    for col in expected_cols:
-        col_key  = normalise_key(col)
-        value    = lower_map.get(col_key, "N/A")
-        str_val  = str(value).strip()
-        normalised[col] = str_val if is_valid_value(str_val) else "N/A"
-    return normalised
-
+    # Create a dictionary mapping the CLEANED AI keys to their original values
+    ai_data_map = {clean_key(k): v for k, v in record.items()}
+    ai_keys = list(ai_data_map.keys())
+    
+    normalised_record = {}
+    
+    for expected_col in expected_cols:
+        target = clean_key(expected_col)
+        value_to_save = "N/A"
+        
+        # 1. Try Exact Match First
+        if target in ai_data_map:
+            value_to_save = ai_data_map[target]
+        else:
+            # 2. Try Substring Match (e.g., 'triglycerides' fits inside 'triglyceridesmgdl')
+            substring_match = next((k for k in ai_keys if target in k or k in target), None)
+            if substring_match:
+                value_to_save = ai_data_map[substring_match]
+            else:
+                # 3. Try Fuzzy Match (Catches slight AI spelling errors)
+                fuzzy_matches = difflib.get_close_matches(target, ai_keys, n=1, cutoff=0.6)
+                if fuzzy_matches:
+                    value_to_save = ai_data_map[fuzzy_matches[0]]
+        
+        str_val = str(value_to_save).strip()
+        normalised_record[expected_col] = str_val if is_valid_value(str_val) else "N/A"
+        
+    return normalised_record
 
 def validate_and_clean_dataframe(df, expected_cols):
     warnings_list = []
@@ -288,7 +293,6 @@ def validate_and_clean_dataframe(df, expected_cols):
 
     return df, warnings_list
 
-
 def add_audit_columns(df, username):
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     if "Created_By" not in df.columns:
@@ -296,7 +300,6 @@ def add_audit_columns(df, username):
     if "Timestamp" not in df.columns:
         df["Timestamp"] = ts
     return df
-
 
 def remove_duplicates(df):
     if df.empty:
@@ -326,7 +329,6 @@ def save_to_local_cache(new_df: pd.DataFrame):
     existing_df = load_local_cache()
     
     if not existing_df.empty:
-        # Combine old and new, and drop duplicates based on System_ID
         combined = pd.concat([existing_df, new_df]).drop_duplicates(subset=['System_ID'], keep='last')
     else:
         combined = new_df
@@ -348,23 +350,17 @@ def clear_local_cache():
 
 @st.cache_resource
 def get_google_sheet_client():
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
-    
-    # 1. Get the raw string from secrets
+    scope = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
     raw_creds = st.secrets["GOOGLE_CREDENTIALS"]
-    
-    # 2. Scrub the string (removes accidental hidden characters/trailing whitespace)
     clean_creds = raw_creds.strip()
     
     try:
-        # 3. Parse and Authorize
         creds_dict = json.loads(clean_creds)
         creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
         return gspread.authorize(creds)
     except Exception as e:
         st.error(f"Credential Parsing Error: {e}")
         st.stop()
-
 
 def _get_or_create_worksheet(sheet_url, tab_name):
     client = get_google_sheet_client()
@@ -373,7 +369,6 @@ def _get_or_create_worksheet(sheet_url, tab_name):
     except gspread.exceptions.WorksheetNotFound:
         spreadsheet = client.open_by_url(sheet_url)
         return spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="30")
-
 
 def pull_from_sheet(sheet_url, tab_name):
     sheet      = _get_or_create_worksheet(sheet_url, tab_name)
@@ -418,14 +413,7 @@ def pull_from_sheet(sheet_url, tab_name):
 
     return cloud_df
 
-
 def push_to_sheet_merge(local_df, sheet_url, tab_name):
-    """
-    Safe merge-push:
-    1. Pull existing cloud data
-    2. Keep cloud rows NOT in local_df (cloud-only records survive)
-    3. Concat remainder + local, then overwrite
-    """
     sheet = _get_or_create_worksheet(sheet_url, tab_name)
     try:
         cloud_df = pull_from_sheet(sheet_url, tab_name)
@@ -467,7 +455,6 @@ _PROFILE_COLUMNS = [
     "Username", "Target_Sheet_URL", "Schema", "Prompt",
     "Abbreviations", "Extra_Rules", "Anti_Rules"
 ]
-
 
 def sync_user_profile(username, mode="pull", profile_data=None):
     admin_url = st.secrets.get("ADMIN_SHEET_URL", "")
@@ -516,24 +503,12 @@ def sync_user_profile(username, mode="pull", profile_data=None):
 # ═══════════════════════════════════════════════════════════════
 
 def compress_image(image_bytes, model_key="gemini"):
-    """
-    Model-aware compression using COMPRESSION_PROFILES.
-
-    OpenAI paid:  1920px / quality 95  — maximum fidelity for dense lab reports
-    Gemini:       1280px / quality 88  — balanced quality vs token cost
-    Groq:         1024px / quality 85  — conservative for free tier limits
-
-    Always converts to RGB so JPEG encoding never errors on RGBA/P/CMYK inputs.
-    Uses LANCZOS resampling (highest quality downsample filter in Pillow).
-    """
     profile = COMPRESSION_PROFILES.get(model_key, COMPRESSION_PROFILES["gemini"])
     img     = Image.open(io.BytesIO(image_bytes))
 
-    # Normalise colour space — JPEG cannot encode RGBA, P, or CMYK
     if img.mode != "RGB":
         img = img.convert("RGB")
 
-    # Downsample only if needed — never upscale
     if img.width > profile["max_size"] or img.height > profile["max_size"]:
         img = img.copy()
         img.thumbnail((profile["max_size"], profile["max_size"]), Image.LANCZOS)
@@ -542,13 +517,12 @@ def compress_image(image_bytes, model_key="gemini"):
     img.save(output, format="JPEG", quality=profile["quality"], optimize=True)
     return output.getvalue()
 
-
 def convert_pdf_to_images(pdf_bytes):
     images = []
     doc    = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
-        pix  = page.get_pixmap(dpi=200)   # Raised from 150 → 200 dpi for dense lab reports
+        pix  = page.get_pixmap(dpi=200)
         images.append(pix.tobytes("jpeg"))
     return images
 
@@ -565,13 +539,13 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
     return (
         f"TASK: Extract clinical data and return a JSON array.\n"
         f"DIRECTIVE: {effective_prompt}\n"
+        f"SAFETY RULE: If you encounter a Patient Name, Phone Number, or exact Address, replace it with '[REDACTED]' in the output.\n"
         f"{abbrev_block}\n"
         f"RULES: {effective_rules}\n"
         f"{anti_block}\n"
-        f"OUTPUT FORMAT: A valid JSON array only, like [{{\"key\": \"value\"}}]. "
-        f"One JSON object per patient/subject. "
-        f"Use 'N/A' for any missing field. "
-        f"Return ONLY the JSON array. No explanation. No markdown. No prose before or after."
+        f"CRITICAL OVERRIDE: You MUST extract ANY matching parameters even if the image is just a cropped table lacking patient names, IDs, or context. Treat all visible data as belonging to one subject.\n"
+        f"OUTPUT FORMAT: A valid JSON array only. Use 'N/A' for any missing field.\n"
+        f"Return ONLY the JSON array. No explanation. No markdown."
     ).strip()
 
 # ═══════════════════════════════════════════════════════════════
@@ -579,7 +553,6 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
 # ═══════════════════════════════════════════════════════════════
 
 def _model_key_from_choice(model_choice):
-    """Map display name to compression profile key."""
     mc = model_choice.lower()
     if "gemini" in mc:
         return "gemini"
@@ -587,24 +560,7 @@ def _model_key_from_choice(model_choice):
         return "openai"
     return "groq"
 
-
 def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, debug_mode=False):
-    """
-    Send image to selected AI model.  Returns (raw_json_string, error_or_None).
-
-    Key design decisions
-    ────────────────────
-    • Rate-limit sleep fires BEFORE the API call (not after) to protect the
-      first request in a batch from hitting a 429.
-    • OpenAI:  uses gpt-4o (not mini) and does NOT use response_format
-      json_object.  That mode requires a dict root and the wrapping instruction
-      was confusing the model on field-level extraction (e.g. HbA1c missing).
-      Instead the prompt enforces raw array output and parse_ai_json_safe handles it.
-    • Gemini:  no response_mime_type — it forced object wrapping that broke
-      array parsing.
-    • All models receive the same prompt terminator:
-      "Return ONLY the JSON array. No explanation. No markdown."
-    """
     full_prompt = (
         f"{final_prompt}\n\n"
         f"REQUIRED JSON KEYS (use EXACTLY these as your key names, no changes): "
@@ -613,13 +569,16 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
         f"Start your response with [ and end with ].\n"
         f"Do NOT use markdown code blocks.\n"
         f"Do NOT write anything before or after the array.\n"
-        f"If the image is unreadable or has no relevant data, DO NOT return an empty array. Instead, return exactly this: [{{\"Extraction_Failed\": \"Briefly explain why (e.g., 'Image too blurry', 'No lab data present', 'This is a consent form')\"}}]"
+        f"If the image is unreadable or has no relevant data, DO NOT return an empty array. Instead, return exactly this: [{{\"Extraction_Failed\": \"Briefly explain why\"}}]"
     )
 
-    # Throttle BEFORE the call — protects first request in a multi-image batch
-    time.sleep(4.5)
-
     model_key  = _model_key_from_choice(model_choice)
+    
+    if model_key == "gemini":
+        time.sleep(4.5)
+    else:
+        time.sleep(0.5)
+
     compressed = compress_image(image_bytes, model_key=model_key)
     b64_image  = base64.b64encode(compressed).decode("utf-8")
 
@@ -632,39 +591,33 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
     )
 
     try:
-        # ── GEMINI ───────────────────────────────────────────
         if "Gemini" in model_choice:
             img               = Image.open(io.BytesIO(compressed))
             gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
             model             = genai.GenerativeModel(gemini_model_name)
-            # No response_mime_type — it wraps output in a dict root which
-            # conflicts with array-first parsing and silently returns nothing.
             response          = model.generate_content([full_prompt, img])
             raw               = response.text.strip()
             debug_log("Gemini Raw Response", raw, debug_mode)
             return raw, None
 
-        # ── OPENAI ───────────────────────────────────────────
         elif "OpenAI" in model_choice:
             client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
-            # FIX 1: gpt-4o instead of gpt-4o-mini
-            #   gpt-4o-mini has significantly weaker vision; it routinely misses
-            #   small-font lab values like HbA1c on dense result tables.
-            # FIX 2: No response_format=json_object
-            #   That mode mandates a dict root, so we had to add a "wrap in data key"
-            #   instruction which was adding cognitive load and causing the model to
-            #   focus on structure over content — exactly why HbA1c was being skipped.
-            #   Without it, gpt-4o follows the prompt and returns a raw array directly,
-            #   which parse_ai_json_safe handles perfectly.
+            
+            strict_prompt = full_prompt.replace(
+                "If the image is unreadable", 
+                "You MUST attempt to extract data. If the image is completely blank"
+            )
+            
             response = client.chat.completions.create(
                 model="gpt-4o",
+                temperature=0.0,
                 messages=[{
                     "role": "user",
                     "content": [
-                        {"type": "text",      "text": full_prompt},
+                        {"type": "text",      "text": strict_prompt},
                         {"type": "image_url", "image_url": {
                             "url":    f"data:image/jpeg;base64,{b64_image}",
-                            "detail": "high"   # Use high-detail vision for dense lab tables
+                            "detail": "high"
                         }}
                     ]
                 }]
@@ -673,7 +626,6 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
             debug_log("OpenAI Raw Response", raw, debug_mode)
             return raw, None
 
-        # ── GROQ ─────────────────────────────────────────────
         elif "Groq" in model_choice:
             client   = Groq(api_key=st.secrets.get("GROQ_API_KEY", ""))
             response = client.chat.completions.create(
@@ -714,25 +666,21 @@ def prepare_images_from_uploads(uploaded_files):
             ready.append((f.name, f.getvalue()))
     return ready
 
-
 def run_extraction_pipeline(
     ready_images, schema_columns, expected_cols,
-    final_prompt, model_choice, mode="batch", debug_mode=False
+    final_prompt, model_choice, mode="batch", debug_mode=False, preview_container=None
 ):
-    """
-    Core extraction loop.
-    mode='single' → merge all pages into one master record dict
-    mode='batch'  → each page may produce multiple separate records
-    Returns (result, processing_log)
-    """
     processing_log = []
     progress_bar   = st.progress(0, text="Starting extraction…")
 
-    # ── BATCH ────────────────────────────────────────────────
     if mode == "batch":
         all_records = []
         for idx, (label, img_bytes) in enumerate(ready_images):
             progress_bar.progress(idx / len(ready_images), text=f"Analysing: {label}")
+            
+            if preview_container:
+                preview_container.image(img_bytes, caption=f"Extracting: {label}", use_container_width=True)
+
             raw_json, api_error = blueprint_decoder(
                 img_bytes, schema_columns, final_prompt, model_choice, debug_mode
             )
@@ -760,15 +708,20 @@ def run_extraction_pipeline(
                 "Records": len(valid), "Detail": f"{len(valid)} subject(s) extracted"
             })
         progress_bar.progress(1.0, text="Extraction complete.")
+        if preview_container:
+            preview_container.success("Extraction complete.")
         if not all_records:
             return pd.DataFrame(), processing_log
         return pd.DataFrame(all_records), processing_log
 
-    # ── SINGLE ───────────────────────────────────────────────
     elif mode == "single":
         master = {col: "N/A" for col in expected_cols}
         for idx, (label, img_bytes) in enumerate(ready_images):
             progress_bar.progress(idx / len(ready_images), text=f"Processing: {label}")
+            
+            if preview_container:
+                preview_container.image(img_bytes, caption=f"Extracting: {label}", use_container_width=True)
+            
             raw_json, api_error = blueprint_decoder(
                 img_bytes, schema_columns, final_prompt, model_choice, debug_mode
             )
@@ -785,21 +738,25 @@ def run_extraction_pipeline(
                     "Records": 0, "Detail": parse_error or "AI returned empty output"
                 })
                 continue
+            
             updated_fields = 0
             for rec in records:
                 normed = normalize_record(rec, expected_cols)
                 for col in expected_cols:
                     new_val = normed.get(col, "N/A")
-                    if is_valid_value(new_val) and not is_valid_value(master[col]):
-                        pass  # keep existing non-N/A value
-                    elif is_valid_value(new_val):
-                        master[col]     = new_val
-                        updated_fields += 1
+                    if is_valid_value(new_val):
+                        # Safely fill the master dictionary if it's currently empty for this field
+                        if not is_valid_value(master.get(col, "N/A")):
+                            master[col] = new_val
+                            updated_fields += 1
+
             processing_log.append({
                 "File": label, "Status": "✅ OK",
                 "Records": 1, "Detail": f"{updated_fields} field(s) filled"
             })
         progress_bar.progress(1.0, text="Compilation complete.")
+        if preview_container:
+            preview_container.success("Extraction complete.")
         return master, processing_log
 
 # ═══════════════════════════════════════════════════════════════
@@ -810,7 +767,6 @@ def _deep_copy_dict(obj):
     if isinstance(obj, dict) or hasattr(obj, "items"):
         return {k: _deep_copy_dict(v) for k, v in obj.items()}
     return obj
-
 
 try:
     mutable_creds = _deep_copy_dict(st.secrets["credentials"])
@@ -843,7 +799,6 @@ elif auth_status is True:
     username = st.session_state.get("username", "")
     name     = st.session_state.get("name", "")
 
-    # ── SESSION INIT ─────────────────────────────────────────
     if "profile_loaded" not in st.session_state:
         with st.spinner("Loading secure profile…"):
             cloud_profile = sync_user_profile(username, mode="pull")
@@ -864,19 +819,19 @@ elif auth_status is True:
             st.session_state.profile_loaded = True
 
     if "master_database" not in st.session_state:
-        st.session_state.master_database = pd.DataFrame()
-        if st.session_state.target_sheet_url:
+        st.session_state.master_database = load_local_cache()
+        if st.session_state.master_database.empty and st.session_state.target_sheet_url:
             try:
                 st.session_state.master_database = pull_from_sheet(
                     st.session_state.target_sheet_url, username
                 )
+                save_to_local_cache(st.session_state.master_database)
             except Exception as exc:
                 logger.warning("Background sheet pull failed: %s", exc)
 
     if "safe_schema_val" not in st.session_state:
         st.session_state.safe_schema_val = st.session_state.schema_input
 
-    # ── SIDEBAR ──────────────────────────────────────────────
     with st.sidebar:
         st.success(f"✅ {name}")
         authenticator.logout("Logout", "sidebar")
@@ -888,7 +843,6 @@ elif auth_status is True:
                 ["Google Gemini (Primary)", "Groq (Free Fallback)", "OpenAI (Paid Fallback)"]
             )
 
-            # Show active compression profile so users know what's being used
             active_profile_key = _model_key_from_choice(selected_model)
             active_profile     = COMPRESSION_PROFILES[active_profile_key]
             st.caption(
@@ -994,11 +948,23 @@ elif auth_status is True:
         with st.expander("🔧 System"):
             st.warning("Clears all unsaved local data.")
             if st.button("Purge Local Cache", use_container_width=True):
+                clear_local_cache()
                 st.session_state.master_database = pd.DataFrame()
                 st.rerun()
 
-    # ── MAIN AREA ────────────────────────────────────────────
     st.title("CloudResearch Command Center")
+
+    if not st.session_state.master_database.empty:
+        m1, m2, m3 = st.columns(3)
+        total_recs = len(st.session_state.master_database)
+        total_cells = st.session_state.master_database.size
+        na_count = (st.session_state.master_database.astype(str).isin(INVALID_VALUES)).sum().sum()
+        completeness = int(((total_cells - na_count) / total_cells) * 100) if total_cells > 0 else 0
+        
+        m1.metric("Total Records", f"{total_recs}")
+        m2.metric("Data Completeness", f"{completeness}%")
+        m3.metric("Current User", f"{username.upper()}")
+        st.divider()
 
     if debug_mode:
         st.info(
@@ -1039,15 +1005,22 @@ elif auth_status is True:
                 "Upload all documents for one subject. "
                 "The engine compiles all pages into one unified profile."
             )
-            with st.form("single_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader(
-                    "Upload Documents",
-                    type=["png", "jpg", "jpeg", "pdf"],
-                    accept_multiple_files=True
-                )
-                submitted = st.form_submit_button(
-                    f"Process via {selected_model.split()[0]}", type="primary"
-                )
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("single_form", clear_on_submit=True):
+                    uploaded_files = st.file_uploader(
+                        "Upload Documents",
+                        type=["png", "jpg", "jpeg", "pdf"],
+                        accept_multiple_files=True
+                    )
+                    submitted = st.form_submit_button(
+                        f"Process via {selected_model.split()[0]}", type="primary"
+                    )
+            
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if submitted and uploaded_files:
                 with st.spinner("Pre-processing files…"):
@@ -1056,7 +1029,8 @@ elif auth_status is True:
 
                 master_record, proc_log = run_extraction_pipeline(
                     ready_images, st.session_state.schema_input, expected_cols,
-                    final_prompt, selected_model, mode="single", debug_mode=debug_mode
+                    final_prompt, selected_model, mode="single", debug_mode=debug_mode,
+                    preview_container=preview_container
                 )
 
                 if isinstance(master_record, dict) and any(
@@ -1079,6 +1053,8 @@ elif auth_status is True:
                         pd.concat([st.session_state.master_database, new_df], ignore_index=True)
                         if not st.session_state.master_database.empty else new_df
                     )
+                    save_to_local_cache(st.session_state.master_database)
+                    
                     st.success(f"✅ Record compiled. Assigned ID: **{new_id}**")
                     for w in warnings:
                         st.warning(w)
@@ -1098,15 +1074,22 @@ elif auth_status is True:
                 "Upload rosters or multi-subject reports. "
                 "Each detected subject gets a unique System_ID."
             )
-            with st.form("batch_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader(
-                    "Upload Documents",
-                    type=["png", "jpg", "jpeg", "pdf"],
-                    accept_multiple_files=True
-                )
-                submitted = st.form_submit_button(
-                    f"Process Batch via {selected_model.split()[0]}", type="primary"
-                )
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("batch_form", clear_on_submit=True):
+                    uploaded_files = st.file_uploader(
+                        "Upload Documents",
+                        type=["png", "jpg", "jpeg", "pdf"],
+                        accept_multiple_files=True
+                    )
+                    submitted = st.form_submit_button(
+                        f"Process Batch via {selected_model.split()[0]}", type="primary"
+                    )
+            
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if submitted and uploaded_files:
                 roster_prompt = final_prompt + (
@@ -1120,7 +1103,8 @@ elif auth_status is True:
 
                 batch_df, proc_log = run_extraction_pipeline(
                     ready_images, st.session_state.schema_input, expected_cols,
-                    roster_prompt, selected_model, mode="batch", debug_mode=debug_mode
+                    roster_prompt, selected_model, mode="batch", debug_mode=debug_mode,
+                    preview_container=preview_container
                 )
 
                 if not batch_df.empty:
@@ -1145,6 +1129,8 @@ elif auth_status is True:
                         pd.concat([st.session_state.master_database, batch_df], ignore_index=True)
                         if not st.session_state.master_database.empty else batch_df
                     )
+                    save_to_local_cache(st.session_state.master_database)
+                    
                     st.success(f"✅ Batch complete. **{len(batch_df)}** record(s) extracted.")
                     if n_dupes:
                         st.info(f"🔁 {n_dupes} duplicate row(s) removed automatically.")
@@ -1161,19 +1147,26 @@ elif auth_status is True:
         # ── UPDATE EXISTING ───────────────────────────────
         elif "Update Existing" in entry_mode:
             st.info("Append new documentation to an existing System_ID.")
-            with st.form("update_form", clear_on_submit=True):
-                c1, c2 = st.columns([1, 2])
-                with c1:
-                    target_id = st.text_input("System_ID Reference", placeholder="CR-XXXX")
-                with c2:
-                    update_files = st.file_uploader(
-                        "Upload Appendices",
-                        type=["png", "jpg", "jpeg", "pdf"],
-                        accept_multiple_files=True
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("update_form", clear_on_submit=True):
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        target_id = st.text_input("System_ID Reference", placeholder="CR-XXXX")
+                    with c2:
+                        update_files = st.file_uploader(
+                            "Upload Appendices",
+                            type=["png", "jpg", "jpeg", "pdf"],
+                            accept_multiple_files=True
+                        )
+                    update_submitted = st.form_submit_button(
+                        f"Update via {selected_model.split()[0]}", type="primary"
                     )
-                update_submitted = st.form_submit_button(
-                    f"Update via {selected_model.split()[0]}", type="primary"
-                )
+            
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if update_submitted:
                 if not target_id:
@@ -1193,7 +1186,8 @@ elif auth_status is True:
 
                     update_record, proc_log = run_extraction_pipeline(
                         ready_images, st.session_state.schema_input, expected_cols,
-                        final_prompt, selected_model, mode="single", debug_mode=debug_mode
+                        final_prompt, selected_model, mode="single", debug_mode=debug_mode,
+                        preview_container=preview_container
                     )
 
                     row_idx = st.session_state.master_database.index[
@@ -1204,17 +1198,21 @@ elif auth_status is True:
                     for col in expected_cols:
                         new_val = update_record.get(col, "N/A")
                         if is_valid_value(new_val):
-                            st.session_state.master_database.at[row_idx, col] = new_val
-                            updated_count += 1
+                            current_val = st.session_state.master_database.at[row_idx, col]
+                            # Update Existing explicitly fills in missing values safely
+                            if not is_valid_value(current_val):
+                                st.session_state.master_database.at[row_idx, col] = new_val
+                                updated_count += 1
 
                     if updated_count:
+                        save_to_local_cache(st.session_state.master_database)
                         st.success(
                             f"✅ Record **{target_id}** updated. "
                             f"{updated_count} field(s) refreshed."
                         )
                     else:
                         st.error(
-                            "⚠️ Update extracted no data. "
+                            "⚠️ Update extracted no new data to fill. "
                             "Enable Debug Mode and re-run to diagnose."
                         )
 
@@ -1233,6 +1231,7 @@ elif auth_status is True:
                 use_container_width=True,
                 key="data_verifier"
             )
+            save_to_local_cache(st.session_state.master_database)
 
         # ── CLOUD SYNC ────────────────────────────────────
         st.divider()
@@ -1275,7 +1274,10 @@ elif auth_status is True:
                                     st.session_state.master_database,
                                     active_sheet_url, project_tab
                                 )
-                                st.toast("☁️ Commit successful.")
+                                clear_local_cache()
+                                st.session_state.master_database = pd.DataFrame()
+                                
+                                st.toast("☁️ Commit successful. Local cache cleared.")
                                 st.rerun()
                             except Exception as exc:
                                 st.error(f"Commit failed: {exc}")
@@ -1291,6 +1293,8 @@ elif auth_status is True:
                             st.session_state.master_database = pull_from_sheet(
                                 active_sheet_url, project_tab
                             )
+                            save_to_local_cache(st.session_state.master_database)
+                            
                             st.toast("Local cache synchronised.")
                             st.rerun()
                         except Exception as exc:
