@@ -348,10 +348,22 @@ def clear_local_cache():
 
 @st.cache_resource
 def get_google_sheet_client():
-    scope      = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
-    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
-    creds      = Credentials.from_service_account_info(creds_dict, scopes=scope)
-    return gspread.authorize(creds)
+    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    
+    # 1. Get the raw string from secrets
+    raw_creds = st.secrets["GOOGLE_CREDENTIALS"]
+    
+    # 2. Scrub the string (removes accidental hidden characters/trailing whitespace)
+    clean_creds = raw_creds.strip()
+    
+    try:
+        # 3. Parse and Authorize
+        creds_dict = json.loads(clean_creds)
+        creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
+        return gspread.authorize(creds)
+    except Exception as e:
+        st.error(f"Credential Parsing Error: {e}")
+        st.stop()
 
 
 def _get_or_create_worksheet(sheet_url, tab_name):
