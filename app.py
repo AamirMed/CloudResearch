@@ -1,3 +1,4 @@
+import sqlite3
 import streamlit as st
 import streamlit_authenticator as stauth
 import pandas as pd
@@ -178,9 +179,9 @@ def parse_ai_json_safe(raw_text):
 
     cleaned = raw_text.strip()
 
-    # Strip markdown code fences
+    # Strip markdown code fences (FIXED REGEX BUG HERE)
     if "```" in cleaned:
-        parts      = re.split(r"```(?:json)?", cleaned)
+        parts      = re.split(r"`{3}(?:json)?", cleaned)
         candidates = [p.strip() for p in parts if p.strip().startswith(("[", "{"))]
         cleaned    = candidates[0] if candidates else cleaned
 
@@ -306,12 +307,48 @@ def remove_duplicates(df):
     return df, before - len(df)
 
 # ═══════════════════════════════════════════════════════════════
+# 3.5 LOCAL SQLITE CACHE (THE VAULT)
+# ═══════════════════════════════════════════════════════════════
+
+def load_local_cache() -> pd.DataFrame:
+    """Loads saved data from the hard drive."""
+    conn = sqlite3.connect('clinical_cache.db')
+    try:
+        df = pd.read_sql('SELECT * FROM temp_records', conn)
+    except Exception:
+        df = pd.DataFrame()
+    conn.close()
+    return df
+
+def save_to_local_cache(new_df: pd.DataFrame):
+    """Appends new data to the hard drive and prevents duplicates."""
+    conn = sqlite3.connect('clinical_cache.db')
+    existing_df = load_local_cache()
+    
+    if not existing_df.empty:
+        # Combine old and new, and drop duplicates based on System_ID
+        combined = pd.concat([existing_df, new_df]).drop_duplicates(subset=['System_ID'], keep='last')
+    else:
+        combined = new_df
+        
+    combined.astype(str).to_sql('temp_records', conn, if_exists='replace', index=False)
+    conn.close()
+
+def clear_local_cache():
+    """Wipes the local hard drive cache after a successful cloud sync."""
+    conn = sqlite3.connect('clinical_cache.db')
+    cursor = conn.cursor()
+    cursor.execute("DROP TABLE IF EXISTS temp_records")
+    conn.commit()
+    conn.close()
+
+# ═══════════════════════════════════════════════════════════════
 # 4. GOOGLE SHEETS INTEGRATION
 # ═══════════════════════════════════════════════════════════════
 
 @st.cache_resource
 def get_google_sheet_client():
-    scope      = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    scope      = ["[https://spreadsheets.google.com/feeds](https://spreadsheets.google.com/feeds)", "[https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)"]
     creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     creds      = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
@@ -511,7 +548,7 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
     effective_prompt = user_prompt.strip() or DEFAULT_PROMPT
     effective_rules  = extra_rules.strip()  or DEFAULT_BUILT_IN_RULES
     abbrev_block     = f"Abbreviation map: {abbreviations.strip()}." if abbreviations.strip() else ""
-    anti_block       = f"Do NOT extract: {anti_rules.strip()}."       if anti_rules.strip()  else ""
+    anti_block       = f"Do NOT extract: {anti_rules.strip()}."        if anti_rules.strip()  else ""
 
     return (
         f"TASK: Extract clinical data and return a JSON array.\n"
