@@ -33,8 +33,471 @@ NUMERIC_KEYWORDS = [
 
 DEFAULT_PROMPT = (
     "You are an expert clinical data extraction engine. "
-    "Extract all structured medical and demographic data from the provided document. "
+    "Extract all structured medical and demographic data visible in this document image. "
     "Apply standard clinical abbreviation expansion. "
+    "Return ONLY a valid JSON array — no explanation, no preamble, no markdown fences."
+)
+
+DEFAULT_BUILT_IN_RULES = (
+    "Expand common abbreviations (M=Male, F=Female, HTN=Hypertension, DM=Diabetes Mellitus). "
+    "Standardize units where visible. "
+    "Use exactly the string 'N/A' for any field that is missing or unreadable. "
+    "Never fabricate or infer data not explicitly present in the document."
+)
+
+PROMPT_TEMPLATES = {
+    "— Select a Template —": {
+        "schema": "", "prompt": "", "abbreviations": "", "rules": "", "anti": ""
+    },
+    "🦠 Microbiology": {
+        "schema": "Patient_ID, Age, Gender, Organism, Antibiotic, MIC, Resistance_Pattern, Specimen_Type, Culture_Date, Outcome",
+        "prompt": "Extract microbiological culture and sensitivity data. Focus on organism identity, antibiotic susceptibility, and clinical outcome.",
+        "abbreviations": "MIC=Minimum Inhibitory Concentration, MDR=Multi-Drug Resistant, MRSA=Methicillin-Resistant S. aureus, S=Sensitive, R=Resistant, I=Intermediate, ESBL=Extended-Spectrum Beta-Lactamase",
+        "rules": "Record each organism–antibiotic pair as a separate entry. If multiple organisms are present, create separate entries for each.",
+        "anti": "Exclude administrative billing codes and non-microbiological findings."
+    },
+    "👤 Demographics": {
+        "schema": "Patient_ID, Age, Gender, Nationality, Comorbidities, Chief_Complaint, Admission_Date, Discharge_Date, LOS_Days",
+        "prompt": "Extract patient demographic and admission data from clinical records.",
+        "abbreviations": "LOS=Length of Stay, HTN=Hypertension, DM=Diabetes Mellitus, CAD=Coronary Artery Disease, CKD=Chronic Kidney Disease, CVA=Cerebrovascular Accident",
+        "rules": "Calculate LOS_Days if both admission and discharge dates are present. List comorbidities as comma-separated values.",
+        "anti": "Exclude laboratory results and medication details from this schema."
+    },
+    "🧪 Laboratory": {
+        "schema": "Patient_ID, Test_Name, Result, Unit, Reference_Range, Flag, Collection_Date, Interpretation",
+        "prompt": "Extract all laboratory investigation results with units, reference ranges, and clinical flags.",
+        "abbreviations": "WBC=White Blood Cells, Hb=Hemoglobin, PLT=Platelets, CRP=C-Reactive Protein, ESR=Erythrocyte Sedimentation Rate, HbA1c=Glycated Hemoglobin, eGFR=Estimated Glomerular Filtration Rate",
+        "rules": "Flag values outside reference range as HIGH or LOW. Extract each test as a separate JSON object.",
+        "anti": "Exclude demographic information from laboratory entries."
+    },
+    "💊 Pharmacology": {
+        "schema": "Patient_ID, Drug_Name, Dose, Route, Frequency, Duration_Days, Indication, ADR, Outcome",
+        "prompt": "Extract medication administration records including dosing, route, and any adverse drug reactions.",
+        "abbreviations": "IV=Intravenous, PO=Per Oral, BD=Twice Daily, TDS=Three Times Daily, OD=Once Daily, ADR=Adverse Drug Reaction, PRN=As Needed, SC=Subcutaneous",
+        "rules": "Record each drug as a separate entry. Note any dose modifications or discontinuations explicitly.",
+        "anti": "Exclude non-pharmaceutical interventions and procedure notes."
+    },
+}
+
+# ═══════════════════════════════════════════════════════════════
+# 1. LOGGING SETUP
+# ═══════════════════════════════════════════════════════════════
+
+logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("cloudresearch")
+
+# ═══════════════════════════════════════════════════════════════
+# 2. UI SETUP
+# ═══════════════════════════════════════════════════════════════
+
+st.set_page_config(page_title="CloudResearch Command Center", layout="wide")
+
+if "GEMINI_API_KEY" in st.secrets:
+    genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
+st.markdown("""
+    <style>
+        h1  { font-size: 1.5rem  !important; font-weight: 700 !important; padding-bottom: 0.5rem !important; }
+        h2  { font-size: 1.1rem  !important; font-weight: 600 !important; padding-top: 1rem !important; padding-bottom: 0.2rem !important; }
+        h3  { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
+        .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
+        .stAlert { border-radius: 6px !important; }
+        .debug-box { background: #1a1a2e; color: #00ff88; padding: 12px;
+                     border-radius: 6px; font-family: monospace; font-size: 0.8rem;
+                     border-left: 3px solid #00ff88; margin: 4px 0; }
+    </style>
+""", unsafe_allow_html=True)
+
+# ═══════════════════════════════════════════════════════════════
+# 3. HELPER UTILITIES
+# ═══════════════════════════════════════════════════════════════
+
+def is_valid_value(value):
+    return str(value).strip().lower() not in INVALID_VALUES
+
+
+def generate_unique_id(existing_ids):
+    alphabet = string.ascii_uppercase + string.digits
+    while True:
+        candidate = "CR-" + "".join(random.choices(alphabet, k=4))
+        if candidate not in existing_ids:
+            return candidate
+
+
+def debug_log(label, content, debug_mode):
+    if debug_mode:
+        st.markdown(
+            f'<div class="debug-box"><b>🔍 {label}</b><br><pre>{str(content)[:1500]}</pre></div>',
+            unsafe_allow_html=True
+        )
+
+
+def parse_ai_json_safe(raw_text):
+    """
+    Robustly parse AI output into a list of dicts.
+    Returns (records_list, error_message_or_None).
+
+    Handles:
+    - Markdown code fences
+    - Trailing prose after the JSON block
+    - Wrapped objects like {"data": [...]}
+    - Single dict responses
+    - Empty or non-JSON responses
+    - Trailing commas (common AI mistake)
+    """
+    if not raw_text or not raw_text.strip():
+        return [], "AI returned an empty response."
+
+    cleaned = raw_text.strip()
+
+    # Strip markdown code fences
+    if "```" in cleaned:
+        parts = re.split(r"```(?:json)?", cleaned)
+        candidates = [p.strip() for p in parts if p.strip().startswith(("[", "{"))]
+        cleaned = candidates[0] if candidates else cleaned
+
+    # Extract the FIRST complete balanced JSON structure
+    # This stops trailing prose from corrupting the parse
+    json_str = None
+    for start_char, end_char in [("[", "]"), ("{", "}")]:
+        start = cleaned.find(start_char)
+        if start == -1:
+            continue
+        depth = 0
+        in_string = False
+        escape_next = False
+        for i, ch in enumerate(cleaned[start:], start=start):
+            if escape_next:
+                escape_next = False
+                continue
+            if ch == "\\" and in_string:
+                escape_next = True
+                continue
+            if ch == '"' and not escape_next:
+                in_string = not in_string
+            if not in_string:
+                if ch == start_char:
+                    depth += 1
+                elif ch == end_char:
+                    depth -= 1
+                    if depth == 0:
+                        json_str = cleaned[start:i + 1]
+                        break
+        if json_str:
+            break
+
+    if not json_str:
+        return [], f"No valid JSON found. Raw snippet: {cleaned[:200]}"
+
+    # Attempt parse, with trailing-comma fix as fallback
+    try:
+        parsed = json.loads(json_str)
+    except json.JSONDecodeError as exc:
+        fixed = re.sub(r",\s*([}\]])", r"\1", json_str)
+        try:
+            parsed = json.loads(fixed)
+        except json.JSONDecodeError:
+            logger.warning("JSON decode failed: %s | raw: %s", exc, json_str[:300])
+            return [], f"JSON parse error: {exc}"
+
+    # Unwrap common envelope patterns
+    if isinstance(parsed, dict):
+        for key in ("data", "records", "patients", "results", "entries", "output"):
+            if key in parsed and isinstance(parsed[key], list):
+                return parsed[key], None
+        return [parsed], None
+
+    if isinstance(parsed, list):
+        return parsed, None
+
+    return [], f"Unexpected JSON root type: {type(parsed).__name__}"
+
+
+def normalize_record(record, expected_cols):
+    """
+    Map AI-returned keys to schema columns.
+    Handles: case, trailing colons, spaces, underscores vs spaces.
+    """
+    def normalise_key(k):
+        return re.sub(r"[\s_\-]+", "_", str(k).lower().strip().rstrip(":"))
+
+    lower_map = {normalise_key(k): v for k, v in record.items()}
+
+    normalised = {}
+    for col in expected_cols:
+        col_key = normalise_key(col)
+        value   = lower_map.get(col_key, "N/A")
+        str_val = str(value).strip()
+        normalised[col] = str_val if is_valid_value(str_val) else "N/A"
+    return normalised
+
+
+def validate_and_clean_dataframe(df, expected_cols):
+    warnings_list = []
+
+    for col in expected_cols:
+        if col not in df.columns:
+            df[col] = "N/A"
+            warnings_list.append(f"Column '{col}' was missing — added with default values.")
+
+    for col in df.columns:
+        if any(kw in col.lower() for kw in NUMERIC_KEYWORDS):
+            original = df[col].copy()
+            coerced  = pd.to_numeric(df[col].replace("N/A", pd.NA), errors="coerce")
+            failed   = coerced.isna() & original.notna() & (original != "N/A")
+            if failed.any():
+                sample = original[failed].iloc[0]
+                warnings_list.append(
+                    f"Column '{col}': {failed.sum()} non-numeric value(s) kept as-is (e.g. '{sample}')."
+                )
+
+    placeholder_map = {v: "N/A" for v in {"nan", "None", "NaN", "none", "null", "NULL", "NA", "N/A", ""}}
+    for col in df.select_dtypes(include="object").columns:
+        df[col] = df[col].astype(str).str.strip().replace(placeholder_map, regex=False)
+
+    return df, warnings_list
+
+
+def add_audit_columns(df, username):
+    ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    if "Created_By" not in df.columns:
+        df["Created_By"] = username
+    if "Timestamp" not in df.columns:
+        df["Timestamp"] = ts
+    return df
+
+
+def remove_duplicates(df):
+    if df.empty:
+        return df, 0
+    key_cols = [c for c in df.columns if c not in {"System_ID", "Timestamp", "Created_By"}]
+    before   = len(df)
+    df       = df.drop_duplicates(subset=key_cols, keep="first").reset_index(drop=True)
+    return df, before - len(df)
+
+# ═══════════════════════════════════════════════════════════════
+# 4. GOOGLE SHEETS INTEGRATION
+# ═══════════════════════════════════════════════════════════════
+
+@st.cache_resource
+def get_google_sheet_client():
+    scope      = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+    creds_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    creds      = Credentials.from_service_account_info(creds_dict, scopes=scope)
+    return gspread.authorize(creds)
+
+
+def _get_or_create_worksheet(sheet_url, tab_name):
+    client = get_google_sheet_client()
+    try:
+        return client.open_by_url(sheet_url).worksheet(tab_name)
+    except gspread.exceptions.WorksheetNotFound:
+        spreadsheet = client.open_by_url(sheet_url)
+        return spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="30")
+
+
+def pull_from_sheet(sheet_url, tab_name):
+    sheet      = _get_or_create_worksheet(sheet_url, tab_name)
+    cloud_data = sheet.get_all_values()
+
+    if len(cloud_data) > 1:
+        cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
+    elif len(cloud_data) == 1:
+        cloud_df = pd.DataFrame(columns=cloud_data[0])
+    else:
+        return pd.DataFrame()
+
+    if cloud_df.empty:
+        return cloud_df
+
+    cloud_df.rename(
+        columns=lambda x: "System_ID" if str(x).strip().lower() in {"system_id", "system id"} else x,
+        inplace=True
+    )
+
+    if "System_ID" not in cloud_df.columns:
+        existing = set()
+        new_ids  = []
+        for _ in range(len(cloud_df)):
+            nid = generate_unique_id(existing)
+            new_ids.append(nid)
+            existing.add(nid)
+        cloud_df.insert(0, "System_ID", new_ids)
+    else:
+        missing_mask = cloud_df["System_ID"].astype(str).str.strip().str.lower().isin(INVALID_VALUES)
+        if missing_mask.any():
+            existing = set(cloud_df.loc[~missing_mask, "System_ID"].astype(str).tolist())
+            new_ids  = []
+            for _ in range(missing_mask.sum()):
+                nid = generate_unique_id(existing)
+                new_ids.append(nid)
+                existing.add(nid)
+            cloud_df.loc[missing_mask, "System_ID"] = new_ids
+
+    return cloud_df
+
+
+def push_to_sheet_merge(local_df, sheet_url, tab_name):
+    """
+    Safe merge-push strategy:
+    1. Pull existing cloud data
+    2. Keep cloud rows NOT in local_df (cloud-only records survive)
+    3. Concat remainder + local, then overwrite
+    Prevents data loss if local cache was incomplete.
+    """
+    sheet = _get_or_create_worksheet(sheet_url, tab_name)
+
+    try:
+        cloud_df = pull_from_sheet(sheet_url, tab_name)
+    except Exception as exc:
+        logger.warning("Could not pull before push: %s", exc)
+        cloud_df = pd.DataFrame()
+
+    if (
+        not cloud_df.empty
+        and "System_ID" in cloud_df.columns
+        and not local_df.empty
+        and "System_ID" in local_df.columns
+    ):
+        preserved = cloud_df[~cloud_df["System_ID"].isin(local_df["System_ID"])]
+        merged_df = pd.concat([preserved, local_df], ignore_index=True)
+    else:
+        merged_df = local_df.copy()
+
+    merged_df = merged_df.astype(str)
+    cols      = ["System_ID"] + [c for c in merged_df.columns if c != "System_ID"]
+    merged_df = merged_df[[c for c in cols if c in merged_df.columns]]
+
+    sheet.clear()
+    if not merged_df.empty:
+        sheet.update(range_name="A1", values=[merged_df.columns.tolist()] + merged_df.values.tolist())
+    else:
+        sheet.update(range_name="A1", values=[["System_ID"]])
+
+    return merged_df
+
+# ═══════════════════════════════════════════════════════════════
+# 5. PROFILE SYNC
+# ═══════════════════════════════════════════════════════════════
+
+_PROFILE_COLUMNS = ["Username", "Target_Sheet_URL", "Schema", "Prompt", "Abbreviations", "Extra_Rules", "Anti_Rules"]
+
+
+def sync_user_profile(username, mode="pull", profile_data=None):
+    admin_url = st.secrets.get("ADMIN_SHEET_URL", "")
+    if not admin_url:
+        return None
+
+    client = get_google_sheet_client()
+    try:
+        sheet = client.open_by_url(admin_url).worksheet("Profiles")
+    except gspread.exceptions.WorksheetNotFound:
+        spreadsheet = client.open_by_url(admin_url)
+        sheet       = spreadsheet.add_worksheet(title="Profiles", rows="100", cols="10")
+        sheet.update(range_name="A1", values=[_PROFILE_COLUMNS])
+
+    if mode == "pull":
+        records = sheet.get_all_records()
+        for row in records:
+            if str(row.get("Username")) == username:
+                return row
+        return None
+
+    elif mode == "push" and profile_data:
+        records = sheet.get_all_records()
+        row_idx = None
+        for i, row in enumerate(records):
+            if str(row.get("Username")) == username:
+                row_idx = i + 2
+                break
+        row_values = [
+            username,
+            profile_data.get("Target_Sheet_URL", ""),
+            profile_data.get("Schema", ""),
+            profile_data.get("Prompt", ""),
+            profile_data.get("Abbreviations", ""),
+            profile_data.get("Extra_Rules", ""),
+            profile_data.get("Anti_Rules", ""),
+        ]
+        if row_idx:
+            sheet.update(range_name=f"A{row_idx}:G{row_idx}", values=[row_values])
+        else:
+            sheet.append_row(row_values)
+        return True
+
+# ═══════════════════════════════════════════════════════════════
+# 6. IMAGE / PDF PROCESSING
+# ═══════════════════════════════════════════════════════════════
+
+def compress_image(image_bytes, quality=88, max_size=1024):
+    """
+    FIX vs original:
+    - Keeps RGB colour (was grayscale — caused failure on small-font docs)
+    - Larger canvas: 1024px (was 768px)
+    - Higher quality: 88% (was 75%)
+    Grayscale + aggressive compression was the #1 silent failure cause.
+    """
+    img = Image.open(io.BytesIO(image_bytes))
+    # Convert any mode to RGB so JPEG encoding never errors
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    img.thumbnail((max_size, max_size))
+    output = io.BytesIO()
+    img.save(output, format="JPEG", quality=quality)
+    return output.getvalue()
+
+
+def convert_pdf_to_images(pdf_bytes):
+    images = []
+    doc    = fitz.open(stream=pdf_bytes, filetype="pdf")
+    for page_num in range(len(doc)):
+        page = doc.load_page(page_num)
+        pix  = page.get_pixmap(dpi=150)
+        images.append(pix.tobytes("jpeg"))
+    return images
+
+# ═══════════════════════════════════════════════════════════════
+# 7. PROMPT BUILDER
+# ═══════════════════════════════════════════════════════════════
+
+def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
+    effective_prompt = user_prompt.strip() or DEFAULT_PROMPT
+    effective_rules  = extra_rules.strip()  or DEFAULT_BUILT_IN_RULES
+    abbrev_block     = f"Abbreviation map: {abbreviations.strip()}." if abbreviations.strip() else ""
+    anti_block       = f"Do NOT extract: {anti_rules.strip()}."       if anti_rules.strip()  else ""
+
+    return (
+        f"TASK: Extract clinical data and return a JSON array.\n"
+        f"DIRECTIVE: {effective_prompt}\n"
+        f"{abbrev_block}\n"
+        f"RULES: {effective_rules}\n"
+        f"{anti_block}\n"
+        f"OUTPUT FORMAT: A valid JSON array only, like [{{'key': 'value'}}]. "
+        f"One JSON object per patient/subject. "
+        f"Use 'N/A' for any missing field. "
+        f"Return ONLY the JSON array. No explanation. No markdown. No prose before or after."
+    ).strip()
+
+# ═══════════════════════════════════════════════════════════════
+# 8. AI EXTRACTION ENGINE
+# ═══════════════════════════════════════════════════════════════
+
+def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, debug_mode=False):
+    """
+    Send image to AI model. Returns (raw_json_string, error_or_None).
+
+    Key fixes vs original:
+    1. Rate limit sleep moved BEFORE the API call (not after)
+    2. Gemini: removed response_mime_type (it forced object wrapping, broke array extraction)
+    3. All models enforce no-markdown, no-prose prompt terminator
+    4. Returns (raw, error) tuple — callers handle failures explicitly, never crash silently
+    """
+    full_prompt = (
+        f"{final_prompt}\n\n"
+        f"REQUIRED JSON KEYS (use EXACTLY these): {schema_columns}\n\n"
+        f"IMPORTANT: Return ONLY a raw JSON array starting with [ and ending with ].\n"
+        f"Do NOT wrap in markdown code blocks.\n"
+        f"Do NOT add any text before or after the    "Apply standard clinical abbreviation expansion. "
     "Return ONLY a valid JSON array — no explanation, no preamble, no markdown."
 )
 
