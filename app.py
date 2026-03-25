@@ -28,7 +28,9 @@ INVALID_VALUES = {'n/a', 'nan', '', 'none', 'null', 'na', 'n.a.', 'not available
 NUMERIC_KEYWORDS = [
     'age', 'weight', 'height', 'dose', 'duration', 'count', 'level',
     'score', 'year', 'days', 'weeks', 'months', 'wbc', 'crp', 'esr',
-    'hb', 'plt', 'mic', 'los', 'temperature', 'bp', 'hr', 'rr', 'spo2'
+    'hb', 'plt', 'mic', 'los', 'temperature', 'bp', 'hr', 'rr', 'spo2',
+    'hba1c', 'glucose', 'cholesterol', 'triglycerides', 'ldl', 'hdl',
+    'creatinine', 'egfr', 'sodium', 'potassium', 'albumin', 'bilirubin'
 ]
 
 DEFAULT_PROMPT = (
@@ -39,11 +41,30 @@ DEFAULT_PROMPT = (
 )
 
 DEFAULT_BUILT_IN_RULES = (
-    "Expand common abbreviations (M=Male, F=Female, HTN=Hypertension, DM=Diabetes Mellitus). "
+    "Expand common abbreviations (M=Male, F=Female, HTN=Hypertension, DM=Diabetes Mellitus, "
+    "HbA1c=Glycated Haemoglobin, FBS=Fasting Blood Sugar, RBS=Random Blood Sugar). "
     "Standardize units where visible. "
     "Use exactly the string 'N/A' for any field that is missing or unreadable. "
     "Never fabricate or infer data not explicitly present in the document."
 )
+
+# ── Per-model image compression settings ─────────────────────
+# OpenAI paid tier: highest fidelity — larger canvas, near-lossless
+# Gemini / Groq:    balanced — good quality, lower token cost
+COMPRESSION_PROFILES = {
+    "openai": {
+        "max_size": 1920,   # Full HD ceiling — preserves table detail
+        "quality":  95,     # Near-lossless JPEG
+    },
+    "gemini": {
+        "max_size": 1280,
+        "quality":  88,
+    },
+    "groq": {
+        "max_size": 1024,
+        "quality":  85,
+    },
+}
 
 PROMPT_TEMPLATES = {
     "— Select a Template —": {
@@ -66,7 +87,11 @@ PROMPT_TEMPLATES = {
     "🧪 Laboratory": {
         "schema": "Patient_ID, Test_Name, Result, Unit, Reference_Range, Flag, Collection_Date, Interpretation",
         "prompt": "Extract all laboratory investigation results with units, reference ranges, and clinical flags.",
-        "abbreviations": "WBC=White Blood Cells, Hb=Hemoglobin, PLT=Platelets, CRP=C-Reactive Protein, ESR=Erythrocyte Sedimentation Rate, HbA1c=Glycated Hemoglobin, eGFR=Estimated Glomerular Filtration Rate",
+        "abbreviations": (
+            "WBC=White Blood Cells, Hb=Hemoglobin, PLT=Platelets, CRP=C-Reactive Protein, "
+            "ESR=Erythrocyte Sedimentation Rate, HbA1c=Glycated Hemoglobin, eGFR=Estimated Glomerular Filtration Rate, "
+            "FBS=Fasting Blood Sugar, RBS=Random Blood Sugar, LDL=Low-Density Lipoprotein, HDL=High-Density Lipoprotein"
+        ),
         "rules": "Flag values outside reference range as HIGH or LOW. Extract each test as a separate JSON object.",
         "anti": "Exclude demographic information from laboratory entries."
     },
@@ -102,9 +127,11 @@ st.markdown("""
         h3  { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
         .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
         .stAlert { border-radius: 6px !important; }
-        .debug-box { background: #1a1a2e; color: #00ff88; padding: 12px;
-                     border-radius: 6px; font-family: monospace; font-size: 0.8rem;
-                     border-left: 3px solid #00ff88; margin: 4px 0; }
+        .debug-box {
+            background: #1a1a2e; color: #00ff88; padding: 12px;
+            border-radius: 6px; font-family: monospace; font-size: 0.8rem;
+            border-left: 3px solid #00ff88; margin: 4px 0;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -127,7 +154,8 @@ def generate_unique_id(existing_ids):
 def debug_log(label, content, debug_mode):
     if debug_mode:
         st.markdown(
-            f'<div class="debug-box"><b>🔍 {label}</b><br><pre>{str(content)[:1500]}</pre></div>',
+            f'<div class="debug-box"><b>🔍 {label}</b><br>'
+            f'<pre>{str(content)[:1500]}</pre></div>',
             unsafe_allow_html=True
         )
 
@@ -138,11 +166,11 @@ def parse_ai_json_safe(raw_text):
     Returns (records_list, error_message_or_None).
 
     Handles:
-    - Markdown code fences
+    - Markdown code fences  ``` json ... ```
     - Trailing prose after the JSON block
-    - Wrapped objects like {"data": [...]}
+    - Wrapped objects  {"data": [...]}
     - Single dict responses
-    - Empty or non-JSON responses
+    - Empty or completely non-JSON responses
     - Trailing commas (common AI mistake)
     """
     if not raw_text or not raw_text.strip():
@@ -152,19 +180,20 @@ def parse_ai_json_safe(raw_text):
 
     # Strip markdown code fences
     if "```" in cleaned:
-        parts = re.split(r"```(?:json)?", cleaned)
+        parts      = re.split(r"```(?:json)?", cleaned)
         candidates = [p.strip() for p in parts if p.strip().startswith(("[", "{"))]
-        cleaned = candidates[0] if candidates else cleaned
+        cleaned    = candidates[0] if candidates else cleaned
 
-    # Extract the FIRST complete balanced JSON structure
-    # This stops trailing prose from corrupting the parse
+    # Extract the FIRST complete balanced JSON structure.
+    # Character-level scan stops at the matching bracket so trailing
+    # prose (e.g. "Let me know if you need help!") never corrupts the parse.
     json_str = None
     for start_char, end_char in [("[", "]"), ("{", "}")]:
         start = cleaned.find(start_char)
         if start == -1:
             continue
-        depth = 0
-        in_string = False
+        depth       = 0
+        in_string   = False
         escape_next = False
         for i, ch in enumerate(cleaned[start:], start=start):
             if escape_next:
@@ -189,7 +218,7 @@ def parse_ai_json_safe(raw_text):
     if not json_str:
         return [], f"No valid JSON found. Raw snippet: {cleaned[:200]}"
 
-    # Attempt parse, with trailing-comma fix as fallback
+    # Primary parse attempt; fallback strips trailing commas
     try:
         parsed = json.loads(json_str)
     except json.JSONDecodeError as exc:
@@ -216,25 +245,23 @@ def parse_ai_json_safe(raw_text):
 def normalize_record(record, expected_cols):
     """
     Map AI-returned keys to schema columns.
-    Handles: case, trailing colons, spaces, underscores vs spaces.
+    Handles: case differences, trailing colons, spaces, underscores vs spaces.
     """
     def normalise_key(k):
         return re.sub(r"[\s_\-]+", "_", str(k).lower().strip().rstrip(":"))
 
-    lower_map = {normalise_key(k): v for k, v in record.items()}
-
+    lower_map  = {normalise_key(k): v for k, v in record.items()}
     normalised = {}
     for col in expected_cols:
-        col_key = normalise_key(col)
-        value   = lower_map.get(col_key, "N/A")
-        str_val = str(value).strip()
+        col_key  = normalise_key(col)
+        value    = lower_map.get(col_key, "N/A")
+        str_val  = str(value).strip()
         normalised[col] = str_val if is_valid_value(str_val) else "N/A"
     return normalised
 
 
 def validate_and_clean_dataframe(df, expected_cols):
     warnings_list = []
-
     for col in expected_cols:
         if col not in df.columns:
             df[col] = "N/A"
@@ -248,10 +275,13 @@ def validate_and_clean_dataframe(df, expected_cols):
             if failed.any():
                 sample = original[failed].iloc[0]
                 warnings_list.append(
-                    f"Column '{col}': {failed.sum()} non-numeric value(s) kept as-is (e.g. '{sample}')."
+                    f"Column '{col}': {failed.sum()} non-numeric value(s) kept as-is "
+                    f"(e.g. '{sample}')."
                 )
 
-    placeholder_map = {v: "N/A" for v in {"nan", "None", "NaN", "none", "null", "NULL", "NA", "N/A", ""}}
+    placeholder_map = {v: "N/A" for v in {
+        "nan", "None", "NaN", "none", "null", "NULL", "NA", "N/A", ""
+    }}
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip().replace(placeholder_map, regex=False)
 
@@ -311,7 +341,8 @@ def pull_from_sheet(sheet_url, tab_name):
         return cloud_df
 
     cloud_df.rename(
-        columns=lambda x: "System_ID" if str(x).strip().lower() in {"system_id", "system id"} else x,
+        columns=lambda x: "System_ID"
+        if str(x).strip().lower() in {"system_id", "system id"} else x,
         inplace=True
     )
 
@@ -324,7 +355,9 @@ def pull_from_sheet(sheet_url, tab_name):
             existing.add(nid)
         cloud_df.insert(0, "System_ID", new_ids)
     else:
-        missing_mask = cloud_df["System_ID"].astype(str).str.strip().str.lower().isin(INVALID_VALUES)
+        missing_mask = (
+            cloud_df["System_ID"].astype(str).str.strip().str.lower().isin(INVALID_VALUES)
+        )
         if missing_mask.any():
             existing = set(cloud_df.loc[~missing_mask, "System_ID"].astype(str).tolist())
             new_ids  = []
@@ -339,14 +372,12 @@ def pull_from_sheet(sheet_url, tab_name):
 
 def push_to_sheet_merge(local_df, sheet_url, tab_name):
     """
-    Safe merge-push strategy:
+    Safe merge-push:
     1. Pull existing cloud data
     2. Keep cloud rows NOT in local_df (cloud-only records survive)
     3. Concat remainder + local, then overwrite
-    Prevents data loss if local cache was incomplete.
     """
     sheet = _get_or_create_worksheet(sheet_url, tab_name)
-
     try:
         cloud_df = pull_from_sheet(sheet_url, tab_name)
     except Exception as exc:
@@ -370,7 +401,10 @@ def push_to_sheet_merge(local_df, sheet_url, tab_name):
 
     sheet.clear()
     if not merged_df.empty:
-        sheet.update(range_name="A1", values=[merged_df.columns.tolist()] + merged_df.values.tolist())
+        sheet.update(
+            range_name="A1",
+            values=[merged_df.columns.tolist()] + merged_df.values.tolist()
+        )
     else:
         sheet.update(range_name="A1", values=[["System_ID"]])
 
@@ -380,7 +414,10 @@ def push_to_sheet_merge(local_df, sheet_url, tab_name):
 # 5. PROFILE SYNC
 # ═══════════════════════════════════════════════════════════════
 
-_PROFILE_COLUMNS = ["Username", "Target_Sheet_URL", "Schema", "Prompt", "Abbreviations", "Extra_Rules", "Anti_Rules"]
+_PROFILE_COLUMNS = [
+    "Username", "Target_Sheet_URL", "Schema", "Prompt",
+    "Abbreviations", "Extra_Rules", "Anti_Rules"
+]
 
 
 def sync_user_profile(username, mode="pull", profile_data=None):
@@ -429,21 +466,31 @@ def sync_user_profile(username, mode="pull", profile_data=None):
 # 6. IMAGE / PDF PROCESSING
 # ═══════════════════════════════════════════════════════════════
 
-def compress_image(image_bytes, quality=88, max_size=1024):
+def compress_image(image_bytes, model_key="gemini"):
     """
-    FIX vs original:
-    - Keeps RGB colour (was grayscale — caused failure on small-font docs)
-    - Larger canvas: 1024px (was 768px)
-    - Higher quality: 88% (was 75%)
-    Grayscale + aggressive compression was the #1 silent failure cause.
+    Model-aware compression using COMPRESSION_PROFILES.
+
+    OpenAI paid:  1920px / quality 95  — maximum fidelity for dense lab reports
+    Gemini:       1280px / quality 88  — balanced quality vs token cost
+    Groq:         1024px / quality 85  — conservative for free tier limits
+
+    Always converts to RGB so JPEG encoding never errors on RGBA/P/CMYK inputs.
+    Uses LANCZOS resampling (highest quality downsample filter in Pillow).
     """
-    img = Image.open(io.BytesIO(image_bytes))
-    # Convert any mode to RGB so JPEG encoding never errors
+    profile = COMPRESSION_PROFILES.get(model_key, COMPRESSION_PROFILES["gemini"])
+    img     = Image.open(io.BytesIO(image_bytes))
+
+    # Normalise colour space — JPEG cannot encode RGBA, P, or CMYK
     if img.mode != "RGB":
         img = img.convert("RGB")
-    img.thumbnail((max_size, max_size))
+
+    # Downsample only if needed — never upscale
+    if img.width > profile["max_size"] or img.height > profile["max_size"]:
+        img = img.copy()
+        img.thumbnail((profile["max_size"], profile["max_size"]), Image.LANCZOS)
+
     output = io.BytesIO()
-    img.save(output, format="JPEG", quality=quality)
+    img.save(output, format="JPEG", quality=profile["quality"], optimize=True)
     return output.getvalue()
 
 
@@ -452,7 +499,7 @@ def convert_pdf_to_images(pdf_bytes):
     doc    = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page_num in range(len(doc)):
         page = doc.load_page(page_num)
-        pix  = page.get_pixmap(dpi=150)
+        pix  = page.get_pixmap(dpi=200)   # Raised from 150 → 200 dpi for dense lab reports
         images.append(pix.tobytes("jpeg"))
     return images
 
@@ -472,7 +519,7 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
         f"{abbrev_block}\n"
         f"RULES: {effective_rules}\n"
         f"{anti_block}\n"
-        f"OUTPUT FORMAT: A valid JSON array only, like [{{'key': 'value'}}]. "
+        f"OUTPUT FORMAT: A valid JSON array only, like [{{\"key\": \"value\"}}]. "
         f"One JSON object per patient/subject. "
         f"Use 'N/A' for any missing field. "
         f"Return ONLY the JSON array. No explanation. No markdown. No prose before or after."
@@ -482,33 +529,58 @@ def build_final_prompt(user_prompt, abbreviations, extra_rules, anti_rules):
 # 8. AI EXTRACTION ENGINE
 # ═══════════════════════════════════════════════════════════════
 
+def _model_key_from_choice(model_choice):
+    """Map display name to compression profile key."""
+    mc = model_choice.lower()
+    if "gemini" in mc:
+        return "gemini"
+    if "openai" in mc:
+        return "openai"
+    return "groq"
+
+
 def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, debug_mode=False):
     """
-    Send image to AI model. Returns (raw_json_string, error_or_None).
+    Send image to selected AI model.  Returns (raw_json_string, error_or_None).
 
-    Key fixes vs original:
-    1. Rate limit sleep moved BEFORE the API call (not after)
-    2. Gemini: removed response_mime_type (it forced object wrapping, broke array extraction)
-    3. All models enforce no-markdown, no-prose prompt terminator
-    4. Returns (raw, error) tuple — callers handle failures explicitly, never crash silently
+    Key design decisions
+    ────────────────────
+    • Rate-limit sleep fires BEFORE the API call (not after) to protect the
+      first request in a batch from hitting a 429.
+    • OpenAI:  uses gpt-4o (not mini) and does NOT use response_format
+      json_object.  That mode requires a dict root and the wrapping instruction
+      was confusing the model on field-level extraction (e.g. HbA1c missing).
+      Instead the prompt enforces raw array output and parse_ai_json_safe handles it.
+    • Gemini:  no response_mime_type — it forced object wrapping that broke
+      array parsing.
+    • All models receive the same prompt terminator:
+      "Return ONLY the JSON array. No explanation. No markdown."
     """
     full_prompt = (
         f"{final_prompt}\n\n"
-        f"REQUIRED JSON KEYS (use EXACTLY these): {schema_columns}\n\n"
-        f"IMPORTANT: Return ONLY a raw JSON array starting with [ and ending with ].\n"
-        f"Do NOT wrap in markdown code blocks.\n"
-        f"Do NOT add any text before or after the array.\n"
-        f"If image is unreadable or contains no data, return exactly: []"
+        f"REQUIRED JSON KEYS (use EXACTLY these as your key names, no changes): "
+        f"{schema_columns}\n\n"
+        f"STRICT OUTPUT RULE: Your entire response must be a single raw JSON array.\n"
+        f"Start your response with [ and end with ].\n"
+        f"Do NOT use markdown code blocks.\n"
+        f"Do NOT write anything before or after the array.\n"
+        f"If the image is unreadable, return: []"
     )
 
-    # FIX: Throttle BEFORE the API call to prevent 429 on the first request in a batch
+    # Throttle BEFORE the call — protects first request in a multi-image batch
     time.sleep(4.5)
 
-    compressed = compress_image(image_bytes)
+    model_key  = _model_key_from_choice(model_choice)
+    compressed = compress_image(image_bytes, model_key=model_key)
     b64_image  = base64.b64encode(compressed).decode("utf-8")
 
-    debug_log("Full Prompt Sent to AI", full_prompt, debug_mode)
-    debug_log("Compressed Image Size", f"{len(compressed) / 1024:.1f} KB", debug_mode)
+    debug_log("Prompt Sent", full_prompt, debug_mode)
+    debug_log(
+        "Image Stats",
+        f"Size after compression: {len(compressed)/1024:.1f} KB  |  "
+        f"Profile: {model_key} — {COMPRESSION_PROFILES[model_key]}",
+        debug_mode
+    )
 
     try:
         # ── GEMINI ───────────────────────────────────────────
@@ -516,13 +588,40 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
             img               = Image.open(io.BytesIO(compressed))
             gemini_model_name = st.secrets.get("GEMINI_MODEL", "gemini-2.5-flash")
             model             = genai.GenerativeModel(gemini_model_name)
-
-            # FIX: Removed response_mime_type="application/json"
-            # When set, Gemini wraps the array in a JSON object root {},
-            # which conflicts with array-first parsing and silently returns nothing.
-            response = model.generate_content([full_prompt, img])
-            raw      = response.text.strip()
+            # No response_mime_type — it wraps output in a dict root which
+            # conflicts with array-first parsing and silently returns nothing.
+            response          = model.generate_content([full_prompt, img])
+            raw               = response.text.strip()
             debug_log("Gemini Raw Response", raw, debug_mode)
+            return raw, None
+
+        # ── OPENAI ───────────────────────────────────────────
+        elif "OpenAI" in model_choice:
+            client = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
+            # FIX 1: gpt-4o instead of gpt-4o-mini
+            #   gpt-4o-mini has significantly weaker vision; it routinely misses
+            #   small-font lab values like HbA1c on dense result tables.
+            # FIX 2: No response_format=json_object
+            #   That mode mandates a dict root, so we had to add a "wrap in data key"
+            #   instruction which was adding cognitive load and causing the model to
+            #   focus on structure over content — exactly why HbA1c was being skipped.
+            #   Without it, gpt-4o follows the prompt and returns a raw array directly,
+            #   which parse_ai_json_safe handles perfectly.
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[{
+                    "role": "user",
+                    "content": [
+                        {"type": "text",      "text": full_prompt},
+                        {"type": "image_url", "image_url": {
+                            "url":    f"data:image/jpeg;base64,{b64_image}",
+                            "detail": "high"   # Use high-detail vision for dense lab tables
+                        }}
+                    ]
+                }]
+            )
+            raw = response.choices[0].message.content.strip()
+            debug_log("OpenAI Raw Response", raw, debug_mode)
             return raw, None
 
         # ── GROQ ─────────────────────────────────────────────
@@ -534,7 +633,9 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
                     "role": "user",
                     "content": [
                         {"type": "text",      "text": full_prompt},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
+                        {"type": "image_url", "image_url": {
+                            "url": f"data:image/jpeg;base64,{b64_image}"
+                        }}
                     ]
                 }]
             )
@@ -542,33 +643,7 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
             debug_log("Groq Raw Response", raw, debug_mode)
             return raw, None
 
-        # ── OPENAI ───────────────────────────────────────────
-        elif "OpenAI" in model_choice:
-            client   = OpenAI(api_key=st.secrets.get("OPENAI_API_KEY", ""))
-            response = client.chat.completions.create(
-                model="gpt-4o-mini",
-                response_format={"type": "json_object"},
-                messages=[{
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            # OpenAI json_object mode requires a dict root,
-                            # so we ask it to wrap under "data" key
-                            "text": full_prompt + (
-                                "\n\nNote: Since this endpoint requires a JSON object root, "
-                                "wrap the patient array like this: {\"data\": [...]}"
-                            )
-                        },
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64_image}"}}
-                    ]
-                }]
-            )
-            raw = response.choices[0].message.content.strip()
-            debug_log("OpenAI Raw Response", raw, debug_mode)
-            return raw, None
-
-        return "[]", f"Unknown model selection: {model_choice}"
+        return "[]", f"Unknown model: {model_choice}"
 
     except Exception as exc:
         error_msg = f"{model_choice} API error: {exc}"
@@ -581,7 +656,6 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
 # ═══════════════════════════════════════════════════════════════
 
 def prepare_images_from_uploads(uploaded_files):
-    """Convert uploaded files (images or PDFs) into (label, bytes) tuples."""
     ready = []
     for f in uploaded_files:
         if f.name.lower().endswith(".pdf"):
@@ -597,108 +671,85 @@ def run_extraction_pipeline(
     final_prompt, model_choice, mode="batch", debug_mode=False
 ):
     """
-    Core extraction loop shared across all three processing modes.
-    mode='single'  → merge all pages into one master record dict
-    mode='batch'   → each page may produce multiple separate records
+    Core extraction loop.
+    mode='single' → merge all pages into one master record dict
+    mode='batch'  → each page may produce multiple separate records
     Returns (result, processing_log)
-      - result is a dict (single) or DataFrame (batch)
     """
     processing_log = []
     progress_bar   = st.progress(0, text="Starting extraction…")
 
-    # ── BATCH MODE ───────────────────────────────────────────
+    # ── BATCH ────────────────────────────────────────────────
     if mode == "batch":
         all_records = []
-
         for idx, (label, img_bytes) in enumerate(ready_images):
             progress_bar.progress(idx / len(ready_images), text=f"Analysing: {label}")
-
             raw_json, api_error = blueprint_decoder(
                 img_bytes, schema_columns, final_prompt, model_choice, debug_mode
             )
-
             if api_error:
                 processing_log.append({
-                    "File": label, "Status": "❌ API Error",
-                    "Records": 0, "Detail": api_error
+                    "File": label, "Status": "❌ API Error", "Records": 0, "Detail": api_error
                 })
                 continue
-
             records, parse_error = parse_ai_json_safe(raw_json)
-            debug_log(f"Parsed Records [{label}]", json.dumps(records[:2], indent=2), debug_mode)
-
+            debug_log(f"Parsed [{label}]", json.dumps(records[:2], indent=2), debug_mode)
             if parse_error or not records:
                 processing_log.append({
                     "File": label, "Status": "⚠️ No Data",
                     "Records": 0, "Detail": parse_error or "AI returned empty output"
                 })
                 continue
-
-            valid = []
-            for rec in records:
-                normed = normalize_record(rec, expected_cols)
-                if any(is_valid_value(v) for v in normed.values()):
-                    valid.append(normed)
-
+            valid = [
+                normalize_record(rec, expected_cols)
+                for rec in records
+                if any(is_valid_value(v) for v in normalize_record(rec, expected_cols).values())
+            ]
             all_records.extend(valid)
             processing_log.append({
                 "File": label, "Status": "✅ OK",
-                "Records": len(valid),
-                "Detail": f"{len(valid)} subject(s) extracted"
+                "Records": len(valid), "Detail": f"{len(valid)} subject(s) extracted"
             })
-
         progress_bar.progress(1.0, text="Extraction complete.")
-
         if not all_records:
             return pd.DataFrame(), processing_log
         return pd.DataFrame(all_records), processing_log
 
-    # ── SINGLE MODE (compile multiple pages into one record) ──
+    # ── SINGLE ───────────────────────────────────────────────
     elif mode == "single":
         master = {col: "N/A" for col in expected_cols}
-
         for idx, (label, img_bytes) in enumerate(ready_images):
             progress_bar.progress(idx / len(ready_images), text=f"Processing: {label}")
-
             raw_json, api_error = blueprint_decoder(
                 img_bytes, schema_columns, final_prompt, model_choice, debug_mode
             )
-
             if api_error:
                 processing_log.append({
-                    "File": label, "Status": "❌ API Error",
-                    "Records": 0, "Detail": api_error
+                    "File": label, "Status": "❌ API Error", "Records": 0, "Detail": api_error
                 })
                 continue
-
             records, parse_error = parse_ai_json_safe(raw_json)
-            debug_log(f"Parsed Records [{label}]", json.dumps(records[:2], indent=2), debug_mode)
-
+            debug_log(f"Parsed [{label}]", json.dumps(records[:2], indent=2), debug_mode)
             if parse_error or not records:
                 processing_log.append({
                     "File": label, "Status": "⚠️ No Data",
                     "Records": 0, "Detail": parse_error or "AI returned empty output"
                 })
                 continue
-
             updated_fields = 0
             for rec in records:
                 normed = normalize_record(rec, expected_cols)
                 for col in expected_cols:
                     new_val = normed.get(col, "N/A")
-                    # Only overwrite if current master value is N/A and new value is real
                     if is_valid_value(new_val) and not is_valid_value(master[col]):
-                        pass  # keep existing
+                        pass  # keep existing non-N/A value
                     elif is_valid_value(new_val):
-                        master[col] = new_val
+                        master[col]     = new_val
                         updated_fields += 1
-
             processing_log.append({
                 "File": label, "Status": "✅ OK",
-                "Records": 1,
-                "Detail": f"{updated_fields} field(s) filled"
+                "Records": 1, "Detail": f"{updated_fields} field(s) filled"
             })
-
         progress_bar.progress(1.0, text="Compilation complete.")
         return master, processing_log
 
@@ -743,7 +794,7 @@ elif auth_status is True:
     username = st.session_state.get("username", "")
     name     = st.session_state.get("name", "")
 
-    # ── SESSION INITIALISATION ───────────────────────────────
+    # ── SESSION INIT ─────────────────────────────────────────
     if "profile_loaded" not in st.session_state:
         with st.spinner("Loading secure profile…"):
             cloud_profile = sync_user_profile(username, mode="pull")
@@ -787,13 +838,26 @@ elif auth_status is True:
                 "AI Model",
                 ["Google Gemini (Primary)", "Groq (Free Fallback)", "OpenAI (Paid Fallback)"]
             )
+
+            # Show active compression profile so users know what's being used
+            active_profile_key = _model_key_from_choice(selected_model)
+            active_profile     = COMPRESSION_PROFILES[active_profile_key]
+            st.caption(
+                f"🖼️ Image profile: **{active_profile['max_size']}px** / "
+                f"**{active_profile['quality']}% quality**"
+            )
+
             active_sheet_url = st.text_input(
                 "Google Sheet URL", value=st.session_state.target_sheet_url
             )
             st.session_state.target_sheet_url = active_sheet_url
+
             debug_mode = st.toggle(
                 "🐛 Debug Mode", value=False,
-                help="Shows raw AI responses, prompts sent, and parse results for each file."
+                help=(
+                    "Shows the exact prompt sent, compressed image size, "
+                    "raw AI response, and parse results for every file."
+                )
             )
 
         with st.expander("📋 Schema", expanded=True):
@@ -815,7 +879,8 @@ elif auth_status is True:
                     if active_sheet_url:
                         with st.spinner("Pulling schema…"):
                             try:
-                                sheet   = get_google_sheet_client().open_by_url(active_sheet_url).worksheet(username)
+                                sheet   = get_google_sheet_client() \
+                                    .open_by_url(active_sheet_url).worksheet(username)
                                 headers = sheet.row_values(1)
                                 clean   = [c for c in headers if c.lower() != "system_id"]
                                 st.session_state.safe_schema_val = ", ".join(clean)
@@ -829,9 +894,16 @@ elif auth_status is True:
                     if active_sheet_url:
                         with st.spinner("Pushing schema…"):
                             try:
-                                sheet   = get_google_sheet_client().open_by_url(active_sheet_url).worksheet(username)
-                                cols    = [c.strip() for c in st.session_state.safe_schema_val.split(",") if c.strip()]
-                                headers = ["System_ID"] + [c for c in cols if c.lower() != "system_id"]
+                                sheet   = get_google_sheet_client() \
+                                    .open_by_url(active_sheet_url).worksheet(username)
+                                cols    = [
+                                    c.strip()
+                                    for c in st.session_state.safe_schema_val.split(",")
+                                    if c.strip()
+                                ]
+                                headers = ["System_ID"] + [
+                                    c for c in cols if c.lower() != "system_id"
+                                ]
                                 sheet.update(range_name="A1", values=[headers])
                                 st.toast("Schema pushed.")
                             except Exception as exc:
@@ -876,13 +948,13 @@ elif auth_status is True:
                 st.session_state.master_database = pd.DataFrame()
                 st.rerun()
 
-    # ── MAIN CONTENT ─────────────────────────────────────────
+    # ── MAIN AREA ────────────────────────────────────────────
     st.title("CloudResearch Command Center")
 
     if debug_mode:
         st.info(
-            "🐛 **Debug Mode is ON** — raw AI output, prompt text, "
-            "and parse diagnostics will appear inline below each processed file."
+            "🐛 **Debug Mode ON** — the exact prompt, image stats, raw AI response, "
+            "and parse diagnostics appear inline below each processed file."
         )
 
     tabs          = st.tabs(["📥 Data Entry & Sync", "🔍 Data Explorer"])
@@ -914,10 +986,15 @@ elif auth_status is True:
 
         # ── SINGLE RECORD ─────────────────────────────────
         if "Single Record" in entry_mode:
-            st.info("Upload all documents for one subject. The engine compiles all pages into a unified profile.")
+            st.info(
+                "Upload all documents for one subject. "
+                "The engine compiles all pages into one unified profile."
+            )
             with st.form("single_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader(
-                    "Upload Documents", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True
+                    "Upload Documents",
+                    type=["png", "jpg", "jpeg", "pdf"],
+                    accept_multiple_files=True
                 )
                 submitted = st.form_submit_button(
                     f"Process via {selected_model.split()[0]}", type="primary"
@@ -926,7 +1003,6 @@ elif auth_status is True:
             if submitted and uploaded_files:
                 with st.spinner("Pre-processing files…"):
                     ready_images = prepare_images_from_uploads(uploaded_files)
-
                 st.write(f"**{len(ready_images)}** image(s) prepared.")
 
                 master_record, proc_log = run_extraction_pipeline(
@@ -934,10 +1010,12 @@ elif auth_status is True:
                     final_prompt, selected_model, mode="single", debug_mode=debug_mode
                 )
 
-                if isinstance(master_record, dict) and any(is_valid_value(v) for v in master_record.values()):
-                    new_df               = pd.DataFrame([master_record])
-                    new_df, warnings     = validate_and_clean_dataframe(new_df, expected_cols)
-                    new_df               = add_audit_columns(new_df, username)
+                if isinstance(master_record, dict) and any(
+                    is_valid_value(v) for v in master_record.values()
+                ):
+                    new_df           = pd.DataFrame([master_record])
+                    new_df, warnings = validate_and_clean_dataframe(new_df, expected_cols)
+                    new_df           = add_audit_columns(new_df, username)
 
                     existing_ids = (
                         set(st.session_state.master_database["System_ID"].astype(str).tolist())
@@ -958,8 +1036,8 @@ elif auth_status is True:
                 else:
                     st.error(
                         "⚠️ Extraction returned no usable data. "
-                        "Try enabling **Debug Mode** (sidebar ▶ ⚙️ Setup) and re-running "
-                        "to inspect the raw AI response and identify the failure point."
+                        "Enable **Debug Mode** (sidebar → ⚙️ Setup) and re-run to "
+                        "inspect the raw AI response."
                     )
 
                 with st.expander("📋 Processing Log", expanded=True):
@@ -967,10 +1045,15 @@ elif auth_status is True:
 
         # ── BATCH PROCESSING ──────────────────────────────
         elif "Batch Processing" in entry_mode:
-            st.info("Upload rosters or multi-subject reports. Each detected subject gets a unique System_ID.")
+            st.info(
+                "Upload rosters or multi-subject reports. "
+                "Each detected subject gets a unique System_ID."
+            )
             with st.form("batch_form", clear_on_submit=True):
                 uploaded_files = st.file_uploader(
-                    "Upload Documents", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True
+                    "Upload Documents",
+                    type=["png", "jpg", "jpeg", "pdf"],
+                    accept_multiple_files=True
                 )
                 submitted = st.form_submit_button(
                     f"Process Batch via {selected_model.split()[0]}", type="primary"
@@ -982,10 +1065,8 @@ elif auth_status is True:
                     "Extract EVERY subject as a SEPARATE JSON object in the array. "
                     "Do NOT merge multiple subjects into one object."
                 )
-
                 with st.spinner("Pre-processing files…"):
                     ready_images = prepare_images_from_uploads(uploaded_files)
-
                 st.write(f"**{len(ready_images)}** image(s) prepared.")
 
                 batch_df, proc_log = run_extraction_pipeline(
@@ -1022,9 +1103,7 @@ elif auth_status is True:
                         st.warning(w)
                 else:
                     st.error(
-                        "⚠️ No records extracted from any uploaded file. "
-                        "Try enabling **Debug Mode** (sidebar ▶ ⚙️ Setup) and re-running "
-                        "to inspect the raw AI response."
+                        "⚠️ No records extracted. Enable **Debug Mode** and re-run to diagnose."
                     )
 
                 with st.expander("📋 Processing Log", expanded=True):
@@ -1039,7 +1118,9 @@ elif auth_status is True:
                     target_id = st.text_input("System_ID Reference", placeholder="CR-XXXX")
                 with c2:
                     update_files = st.file_uploader(
-                        "Upload Appendices", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True
+                        "Upload Appendices",
+                        type=["png", "jpg", "jpeg", "pdf"],
+                        accept_multiple_files=True
                     )
                 update_submitted = st.form_submit_button(
                     f"Update via {selected_model.split()[0]}", type="primary"
@@ -1050,7 +1131,9 @@ elif auth_status is True:
                     st.error("System_ID is required.")
                 elif (
                     st.session_state.master_database.empty
-                    or target_id not in st.session_state.master_database.get("System_ID", pd.Series()).values
+                    or target_id not in st.session_state.master_database.get(
+                        "System_ID", pd.Series()
+                    ).values
                 ):
                     st.error(f"'{target_id}' not found locally. Pull from cloud first.")
                 elif not update_files:
@@ -1076,7 +1159,10 @@ elif auth_status is True:
                             updated_count += 1
 
                     if updated_count:
-                        st.success(f"✅ Record **{target_id}** updated. {updated_count} field(s) refreshed.")
+                        st.success(
+                            f"✅ Record **{target_id}** updated. "
+                            f"{updated_count} field(s) refreshed."
+                        )
                     else:
                         st.error(
                             "⚠️ Update extracted no data. "
@@ -1084,9 +1170,11 @@ elif auth_status is True:
                         )
 
                     with st.expander("📋 Processing Log", expanded=True):
-                        st.dataframe(pd.DataFrame(proc_log), use_container_width=True, hide_index=True)
+                        st.dataframe(
+                            pd.DataFrame(proc_log), use_container_width=True, hide_index=True
+                        )
 
-        # ── DATA VERIFICATION TABLE ───────────────────────
+        # ── VERIFICATION TABLE ────────────────────────────
         if not st.session_state.master_database.empty:
             st.divider()
             st.subheader("Data Verification Table")
@@ -1115,7 +1203,9 @@ elif auth_status is True:
                     if n_dupes:
                         st.info(f"Removed {n_dupes} duplicate(s) before commit.")
 
-                    final_cols = ["System_ID"] + [c for c in expected_cols if c.lower() != "system_id"]
+                    final_cols = ["System_ID"] + [
+                        c for c in expected_cols if c.lower() != "system_id"
+                    ]
                     for col in final_cols:
                         if col not in st.session_state.master_database.columns:
                             st.session_state.master_database[col] = "N/A"
@@ -1128,12 +1218,13 @@ elif auth_status is True:
                         .astype(str).str.strip().str.lower().isin(INVALID_VALUES)
                     )
                     if missing.any():
-                        st.error(f"{missing.sum()} record(s) missing System_ID. Resolve before committing.")
+                        st.error(f"{missing.sum()} record(s) missing System_ID.")
                     else:
-                        with st.spinner("Merging and committing to Google Sheets…"):
+                        with st.spinner("Merging and committing…"):
                             try:
                                 push_to_sheet_merge(
-                                    st.session_state.master_database, active_sheet_url, project_tab
+                                    st.session_state.master_database,
+                                    active_sheet_url, project_tab
                                 )
                                 st.toast("☁️ Commit successful.")
                                 st.rerun()
@@ -1189,7 +1280,6 @@ elif auth_status is True:
 
             all_cols = [c for c in df.columns if c != "System_ID"]
 
-            # ── SEARCH & FILTER ───────────────────────────
             st.markdown("#### 🔍 Search & Filter")
             s1, s2 = st.columns([2, 1])
             with s1:
@@ -1200,7 +1290,6 @@ elif auth_status is True:
                 filter_col = st.selectbox("Filter by column", ["— None —"] + all_cols)
 
             filtered_df = df.copy()
-
             if global_search.strip():
                 mask = filtered_df.astype(str).apply(
                     lambda c: c.str.contains(global_search.strip(), case=False, na=False)
@@ -1208,33 +1297,33 @@ elif auth_status is True:
                 filtered_df = filtered_df[mask]
 
             if filter_col != "— None —":
-                unique_vals  = sorted(filtered_df[filter_col].dropna().astype(str).unique().tolist())
-                default_sel  = unique_vals[:10] if len(unique_vals) > 10 else unique_vals
+                unique_vals   = sorted(
+                    filtered_df[filter_col].dropna().astype(str).unique().tolist()
+                )
+                default_sel   = unique_vals[:10] if len(unique_vals) > 10 else unique_vals
                 selected_vals = st.multiselect(
                     f"Values for '{filter_col}'", unique_vals, default=default_sel
                 )
                 if selected_vals:
-                    filtered_df = filtered_df[filtered_df[filter_col].astype(str).isin(selected_vals)]
+                    filtered_df = filtered_df[
+                        filtered_df[filter_col].astype(str).isin(selected_vals)
+                    ]
 
             st.caption(f"Showing **{len(filtered_df)}** of **{len(df)}** records.")
             st.dataframe(filtered_df, use_container_width=True, hide_index=True)
 
             st.divider()
-
-            # ── GROUPING ──────────────────────────────────
             st.markdown("#### 📊 Grouping & Counts")
             group_col = st.selectbox("Group by", ["— None —"] + all_cols, key="group_sel")
             if group_col != "— None —":
-                group_counts = (
+                group_counts         = (
                     filtered_df[group_col].astype(str).value_counts().reset_index()
                 )
-                group_counts.columns    = [group_col, "Count"]
-                group_counts = group_counts[group_counts[group_col] != "N/A"]
+                group_counts.columns = [group_col, "Count"]
+                group_counts         = group_counts[group_counts[group_col] != "N/A"]
                 st.dataframe(group_counts, use_container_width=True, hide_index=True)
 
             st.divider()
-
-            # ── VISUALISATION ─────────────────────────────
             st.markdown("#### 📈 Visualisation")
             v1, v2 = st.columns(2)
             with v1:
