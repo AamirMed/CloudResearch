@@ -613,7 +613,7 @@ def blueprint_decoder(image_bytes, schema_columns, final_prompt, model_choice, d
         f"Start your response with [ and end with ].\n"
         f"Do NOT use markdown code blocks.\n"
         f"Do NOT write anything before or after the array.\n"
-        f"If the image is unreadable, return: []"
+        f"If the image is unreadable or has no relevant data, DO NOT return an empty array. Instead, return exactly this: [{{\"Extraction_Failed\": \"Briefly explain why (e.g., 'Image too blurry', 'No lab data present', 'This is a consent form')\"}}]"
     )
 
     # Throttle BEFORE the call — protects first request in a multi-image batch
