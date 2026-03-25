@@ -128,6 +128,7 @@ st.markdown("""
         h3  { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
         .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
         .stAlert { border-radius: 6px !important; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; color: #2E66F6 !important; }
         .debug-box {
             background: #1a1a2e; color: #00ff88; padding: 12px;
             border-radius: 6px; font-family: monospace; font-size: 0.8rem;
@@ -181,9 +182,8 @@ def parse_ai_json_safe(raw_text):
 
     # Strip markdown code fences
     if "```" in cleaned:
-        parts      = re.split(r"```(?:json)?", cleaned)
-        candidates = [p.strip() for p in parts if p.strip().startswith(("[", "{"))]
-        cleaned    = candidates[0] if candidates else cleaned
+        parts      = re.split(r"
+http://googleusercontent.com/immersive_entry_chip/0
 
     # Extract the FIRST complete balanced JSON structure.
     # Character-level scan stops at the matching bracket so trailing
