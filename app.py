@@ -77,6 +77,13 @@ PROMPT_TEMPLATES = {
         "rules": "Record each drug as a separate entry. Note any dose modifications or discontinuations explicitly.",
         "anti": "Exclude non-pharmaceutical interventions and procedure notes."
     },
+    "📝 Printed Form": {
+        "schema": "Full_Name, Date, Question_1, Question_2, Comments",
+        "prompt": "You are scanning a physical printed survey. Read the handwritten text and identify which checkboxes or bubbles have been marked with a pen or pencil.",
+        "abbreviations": "",
+        "rules": "If a bubble is shaded or has an 'X', count it as 'True' or 'Selected'.",
+        "anti": ""
+    }
 }
 
 # ═══════════════════════════════════════════════════════════════
@@ -95,13 +102,22 @@ st.set_page_config(page_title="CloudResearch Command Center", layout="wide")
 if "GEMINI_API_KEY" in st.secrets:
     genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
+# PREMIUM CSS DASHBOARD STYLING
 st.markdown("""
     <style>
-        h1  { font-size: 1.5rem  !important; font-weight: 700 !important; padding-bottom: 0.5rem !important; }
-        h2  { font-size: 1.1rem  !important; font-weight: 600 !important; padding-top: 1rem   !important; padding-bottom: 0.2rem !important; }
-        h3  { font-size: 1.05rem !important; font-weight: 600 !important; padding-bottom: 0.2rem !important; }
-        .streamlit-expanderHeader { font-weight: 600 !important; font-size: 0.95rem !important; }
-        .stAlert { border-radius: 6px !important; }
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+        html, body, [class*="st-emotion-cache"] { font-family: 'Inter', sans-serif; background-color: #F4F7F9 !important; }
+        .block-container { padding-top: 2rem !important; padding-bottom: 2rem !important; max-width: 95% !important; background-color: #FFFFFF !important; border-radius: 12px; box-shadow: 0 4px 20px rgba(0,0,0,0.05) !important; margin-top: 1rem; margin-bottom: 1rem; }
+        h1 { font-size: 1.8rem !important; font-weight: 700 !important; color: #0F172A !important; letter-spacing: -0.5px !important; border-bottom: 2px solid #E2E8F0; padding-bottom: 0.5rem; margin-bottom: 1.5rem;}
+        h2 { font-size: 1.3rem !important; font-weight: 600 !important; color: #1E293B !important; padding-top: 1rem !important; }
+        h3 { font-size: 1.1rem !important; font-weight: 600 !important; color: #334155 !important; }
+        .stButton > button { border-radius: 6px !important; font-weight: 600 !important; transition: all 0.2s ease-in-out !important; }
+        .stButton > button[kind="primary"] { background-color: #2E66F6 !important; color: #FFFFFF !important; border: none !important; }
+        .stButton > button:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(46, 102, 246, 0.2) !important; }
+        [data-testid="stSidebar"] { background-color: #1E293B !important; border-right: none !important; }
+        [data-testid="stSidebar"] * { color: #F8FAFC !important; }
+        [data-testid="stSidebar"] input, [data-testid="stSidebar"] textarea, [data-testid="stSidebar"] select { background-color: #334155 !important; color: #FFFFFF !important; border: 1px solid #475569 !important; }
+        [data-testid="stMetricValue"] { font-size: 1.8rem !important; font-weight: 700 !important; color: #2E66F6 !important; }
     </style>
 """, unsafe_allow_html=True)
 
@@ -113,7 +129,6 @@ def is_valid_value(value: str) -> bool:
     """Return True if value contains real data (not a placeholder)."""
     return str(value).strip().lower() not in INVALID_VALUES
 
-
 def generate_unique_id(existing_ids: set) -> str:
     """Generate a collision-free CR-XXXX identifier."""
     alphabet = string.ascii_uppercase + string.digits
@@ -122,24 +137,17 @@ def generate_unique_id(existing_ids: set) -> str:
         if candidate not in existing_ids:
             return candidate
 
-
 def parse_ai_json_safe(raw_text: str) -> tuple[list[dict], str | None]:
-    """
-    Safely parse AI output into a list of dicts.
-    Returns (records_list, error_message_or_None).
-    Never raises; always returns a (possibly empty) list.
-    """
+    """Safely parse AI output into a list of dicts."""
     if not raw_text or not raw_text.strip():
         return [], "AI returned an empty response."
 
-    # Strip markdown code fences
     cleaned = raw_text.strip()
     for fence in ["```json", "```"]:
         if fence in cleaned:
             parts = cleaned.split(fence)
             cleaned = parts[1] if len(parts) > 1 else cleaned
 
-    # Extract the first JSON array or object
     match = re.search(r'(\[.*\]|\{.*\})', cleaned, re.DOTALL)
     if not match:
         return [], f"No valid JSON structure found in output. Raw snippet: {cleaned[:120]}"
@@ -153,7 +161,6 @@ def parse_ai_json_safe(raw_text: str) -> tuple[list[dict], str | None]:
         return [], f"JSON parse error: {exc}"
 
     if isinstance(parsed, dict):
-        # OpenAI wraps in {"data": [...]}
         for key in ("data", "records", "patients", "results"):
             if key in parsed and isinstance(parsed[key], list):
                 return parsed[key], None
@@ -164,16 +171,8 @@ def parse_ai_json_safe(raw_text: str) -> tuple[list[dict], str | None]:
 
     return [], f"Unexpected JSON type: {type(parsed).__name__}"
 
-
 def normalize_record(record: dict, expected_cols: list[str]) -> dict:
-    """
-    Ensure a record contains exactly the expected columns.
-    Missing columns are filled with 'N/A'. Extra columns are discarded.
-    Also tries fuzzy key matching (strips trailing colons, case-insensitive).
-    """
-    # Build a case-insensitive lookup of the raw record
     lower_map = {k.lower().rstrip(":"): v for k, v in record.items()}
-
     normalized = {}
     for col in expected_cols:
         col_key = col.lower().strip()
@@ -181,60 +180,34 @@ def normalize_record(record: dict, expected_cols: list[str]) -> dict:
         normalized[col] = str(value).strip() if is_valid_value(str(value)) else "N/A"
     return normalized
 
-
 def validate_and_clean_dataframe(df: pd.DataFrame, expected_cols: list[str]) -> tuple[pd.DataFrame, list[str]]:
-    """
-    Validate a DataFrame against the expected schema.
-    Returns (cleaned_df, list_of_warning_messages).
-    """
     warnings: list[str] = []
-
-    # Ensure all expected columns exist
     for col in expected_cols:
         if col not in df.columns:
             df[col] = "N/A"
             warnings.append(f"Column '{col}' was missing and has been added with default values.")
 
-    # Attempt numeric coercion on columns whose names contain numeric keywords
     for col in df.columns:
         if any(kw in col.lower() for kw in NUMERIC_KEYWORDS):
             original = df[col].copy()
             coerced = pd.to_numeric(df[col].replace("N/A", pd.NA), errors="coerce")
             failed = coerced.isna() & original.notna() & (original != "N/A")
             if failed.any():
-                warnings.append(
-                    f"Column '{col}': {failed.sum()} non-numeric value(s) left as-is — "
-                    f"e.g. '{original[failed].iloc[0]}'."
-                )
+                warnings.append(f"Column '{col}': {failed.sum()} non-numeric value(s) left as-is — e.g. '{original[failed].iloc[0]}'.")
 
-    # Standardise placeholder variants across all object columns
     for col in df.select_dtypes(include="object").columns:
         df[col] = df[col].astype(str).str.strip()
-        df[col] = df[col].replace(
-            {v: "N/A" for v in {"nan", "None", "NaN", "none", "null", "NULL", "N/A", "NA"}},
-            regex=False
-        )
-
+        df[col] = df[col].replace({v: "N/A" for v in {"nan", "None", "NaN", "none", "null", "NULL", "N/A", "NA"}}, regex=False)
     return df, warnings
 
-
 def add_audit_columns(df: pd.DataFrame, username: str) -> pd.DataFrame:
-    """Append Created_By and Timestamp columns if they don't already exist."""
     ts = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
-    if "Created_By" not in df.columns:
-        df["Created_By"] = username
-    if "Timestamp" not in df.columns:
-        df["Timestamp"] = ts
+    if "Created_By" not in df.columns: df["Created_By"] = username
+    if "Timestamp" not in df.columns: df["Timestamp"] = ts
     return df
 
-
 def remove_duplicates(df: pd.DataFrame) -> tuple[pd.DataFrame, int]:
-    """
-    Remove duplicate rows by comparing all columns except System_ID, Timestamp, Created_By.
-    Returns (deduplicated_df, number_of_rows_removed).
-    """
-    if df.empty:
-        return df, 0
+    if df.empty: return df, 0
     key_cols = [c for c in df.columns if c not in {"System_ID", "Timestamp", "Created_By"}]
     before = len(df)
     df = df.drop_duplicates(subset=key_cols, keep="first").reset_index(drop=True)
@@ -251,44 +224,24 @@ def get_google_sheet_client():
     creds = Credentials.from_service_account_info(creds_dict, scopes=scope)
     return gspread.authorize(creds)
 
-
 def _get_or_create_worksheet(sheet_url: str, tab_name: str):
-    """Open worksheet, creating it if absent."""
     client = get_google_sheet_client()
-    try:
-        return client.open_by_url(sheet_url).worksheet(tab_name)
+    try: return client.open_by_url(sheet_url).worksheet(tab_name)
     except gspread.exceptions.WorksheetNotFound:
         spreadsheet = client.open_by_url(sheet_url)
         return spreadsheet.add_worksheet(title=tab_name, rows="1000", cols="30")
 
-
 def pull_from_sheet(sheet_url: str, tab_name: str) -> pd.DataFrame:
-    """Pull data from Google Sheets into a DataFrame, auto-assigning missing System_IDs."""
     sheet = _get_or_create_worksheet(sheet_url, tab_name)
     cloud_data = sheet.get_all_values()
+    if len(cloud_data) > 1: cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
+    elif len(cloud_data) == 1: cloud_df = pd.DataFrame(columns=cloud_data[0])
+    else: return pd.DataFrame()
 
-    if len(cloud_data) > 1:
-        cloud_df = pd.DataFrame(cloud_data[1:], columns=cloud_data[0])
-    elif len(cloud_data) == 1:
-        cloud_df = pd.DataFrame(columns=cloud_data[0])
-    else:
-        return pd.DataFrame()
+    if cloud_df.empty: return cloud_df
 
-    if cloud_df.empty:
-        return cloud_df
-
-    # Normalise System_ID column name
-    cloud_df.rename(
-        columns=lambda x: "System_ID" if str(x).strip().lower() in {"system_id", "system id"} else x,
-        inplace=True
-    )
-
+    cloud_df.rename(columns=lambda x: "System_ID" if str(x).strip().lower() in {"system_id", "system id"} else x, inplace=True)
     if "System_ID" not in cloud_df.columns:
-        existing: set[str] = set()
-        new_ids = [generate_unique_id(existing := existing | {nid}) or nid
-                   for _ in range(len(cloud_df))
-                   for nid in [generate_unique_id(existing)]]
-        # Simpler:
         existing = set()
         new_ids = []
         for _ in range(len(cloud_df)):
@@ -306,32 +259,16 @@ def pull_from_sheet(sheet_url: str, tab_name: str) -> pd.DataFrame:
                 new_ids.append(nid)
                 existing.add(nid)
             cloud_df.loc[missing_mask, "System_ID"] = new_ids
-
     return cloud_df
 
-
 def push_to_sheet_merge(local_df: pd.DataFrame, sheet_url: str, tab_name: str) -> pd.DataFrame:
-    """
-    Safe merge-push strategy:
-    1. Pull existing cloud data.
-    2. Remove cloud rows whose System_ID is present in local_df (local takes priority).
-    3. Concatenate cloud remainder + local, then push.
-    This prevents total data loss if the local cache was incomplete.
-    """
     sheet = _get_or_create_worksheet(sheet_url, tab_name)
-
-    try:
-        cloud_df = pull_from_sheet(sheet_url, tab_name)
+    try: cloud_df = pull_from_sheet(sheet_url, tab_name)
     except Exception as exc:
         logger.warning("Could not pull existing cloud data before push: %s", exc)
         cloud_df = pd.DataFrame()
 
-    if (
-        not cloud_df.empty
-        and "System_ID" in cloud_df.columns
-        and not local_df.empty
-        and "System_ID" in local_df.columns
-    ):
+    if not cloud_df.empty and "System_ID" in cloud_df.columns and not local_df.empty and "System_ID" in local_df.columns:
         preserved = cloud_df[~cloud_df["System_ID"].isin(local_df["System_ID"])]
         merged_df = pd.concat([preserved, local_df], ignore_index=True)
     else:
@@ -342,11 +279,8 @@ def push_to_sheet_merge(local_df: pd.DataFrame, sheet_url: str, tab_name: str) -
     merged_df = merged_df[[c for c in cols if c in merged_df.columns]]
 
     sheet.clear()
-    if not merged_df.empty:
-        sheet.update(range_name="A1", values=[merged_df.columns.tolist()] + merged_df.values.tolist())
-    else:
-        sheet.update(range_name="A1", values=[["System_ID"]])
-
+    if not merged_df.empty: sheet.update(range_name="A1", values=[merged_df.columns.tolist()] + merged_df.values.tolist())
+    else: sheet.update(range_name="A1", values=[["System_ID"]])
     return merged_df
 
 # ═══════════════════════════════════════════════════════════════
@@ -355,15 +289,11 @@ def push_to_sheet_merge(local_df: pd.DataFrame, sheet_url: str, tab_name: str) -
 
 _PROFILE_COLUMNS = ["Username", "Target_Sheet_URL", "Schema", "Prompt", "Abbreviations", "Extra_Rules", "Anti_Rules"]
 
-
 def sync_user_profile(username: str, mode: str = "pull", profile_data: dict | None = None):
     admin_url = st.secrets.get("ADMIN_SHEET_URL", "")
-    if not admin_url:
-        return None
-
+    if not admin_url: return None
     client = get_google_sheet_client()
-    try:
-        sheet = client.open_by_url(admin_url).worksheet("Profiles")
+    try: sheet = client.open_by_url(admin_url).worksheet("Profiles")
     except gspread.exceptions.WorksheetNotFound:
         spreadsheet = client.open_by_url(admin_url)
         sheet = spreadsheet.add_worksheet(title="Profiles", rows="100", cols="10")
@@ -372,10 +302,8 @@ def sync_user_profile(username: str, mode: str = "pull", profile_data: dict | No
     if mode == "pull":
         records = sheet.get_all_records()
         for row in records:
-            if str(row.get("Username")) == username:
-                return row
+            if str(row.get("Username")) == username: return row
         return None
-
     elif mode == "push" and profile_data:
         records = sheet.get_all_records()
         row_idx = None
@@ -383,20 +311,13 @@ def sync_user_profile(username: str, mode: str = "pull", profile_data: dict | No
             if str(row.get("Username")) == username:
                 row_idx = i + 2
                 break
-
         row_values = [
-            username,
-            profile_data.get("Target_Sheet_URL", ""),
-            profile_data.get("Schema", ""),
-            profile_data.get("Prompt", ""),
-            profile_data.get("Abbreviations", ""),
-            profile_data.get("Extra_Rules", ""),
-            profile_data.get("Anti_Rules", ""),
+            username, profile_data.get("Target_Sheet_URL", ""), profile_data.get("Schema", ""),
+            profile_data.get("Prompt", ""), profile_data.get("Abbreviations", ""),
+            profile_data.get("Extra_Rules", ""), profile_data.get("Anti_Rules", ""),
         ]
-        if row_idx:
-            sheet.update(range_name=f"A{row_idx}:G{row_idx}", values=[row_values])
-        else:
-            sheet.append_row(row_values)
+        if row_idx: sheet.update(range_name=f"A{row_idx}:G{row_idx}", values=[row_values])
+        else: sheet.append_row(row_values)
         return True
 
 # ═══════════════════════════════════════════════════════════════
@@ -404,7 +325,6 @@ def sync_user_profile(username: str, mode: str = "pull", profile_data: dict | No
 # ═══════════════════════════════════════════════════════════════
 
 def compress_image(image_bytes: bytes) -> bytes:
-    """Grayscale + resize + JPEG compress to reduce API token usage."""
     img = Image.open(io.BytesIO(image_bytes))
     img = img.convert("L")
     img.thumbnail((768, 768))
@@ -412,9 +332,7 @@ def compress_image(image_bytes: bytes) -> bytes:
     img.save(output, format="JPEG", quality=75)
     return output.getvalue()
 
-
 def convert_pdf_to_images(pdf_bytes: bytes) -> list[bytes]:
-    """Rasterise each PDF page to a JPEG byte string."""
     images = []
     doc = fitz.open(stream=pdf_bytes, filetype="pdf")
     for page_num in range(len(doc)):
@@ -428,10 +346,6 @@ def convert_pdf_to_images(pdf_bytes: bytes) -> list[bytes]:
 # ═══════════════════════════════════════════════════════════════
 
 def build_final_prompt(user_prompt: str, abbreviations: str, extra_rules: str, anti_rules: str) -> str:
-    """
-    Assemble a minified, token-efficient extraction prompt.
-    Injects default rules when user leaves fields blank.
-    """
     effective_prompt = user_prompt.strip() or DEFAULT_PROMPT
     effective_rules  = extra_rules.strip()  or DEFAULT_BUILT_IN_RULES
     abbrev_block     = f"Map: {abbreviations.strip()}." if abbreviations.strip() else ""
@@ -440,6 +354,7 @@ def build_final_prompt(user_prompt: str, abbreviations: str, extra_rules: str, a
     return (
         f"Task: Extract clinical data to JSON array. "
         f"Directive: {effective_prompt}. "
+        f"SAFETY RULE: If you encounter a Patient Name, Phone Number, or exact Address, replace it with '[REDACTED]' in the output. " # <-- REDACTION SHIELD
         f"{abbrev_block} "
         f"Rules: {effective_rules}. "
         f"{anti_block} "
@@ -457,10 +372,7 @@ def blueprint_decoder(
     final_prompt: str,
     model_choice: str
 ) -> tuple[str, str | None]:
-    """
-    Send an image to the selected AI model and return the raw JSON string.
-    Returns (raw_json_string, error_message_or_None).
-    """
+    
     full_prompt = (
         f"{final_prompt}\n\n"
         f"REQUIRED JSON KEYS: [{schema_columns}]\n\n"
@@ -526,11 +438,8 @@ def blueprint_decoder(
 # ═══════════════════════════════════════════════════════════════
 
 def _deep_copy_dict(obj):
-    """Recursively convert immutable mappings to plain dicts."""
-    if isinstance(obj, dict) or hasattr(obj, "items"):
-        return {k: _deep_copy_dict(v) for k, v in obj.items()}
+    if isinstance(obj, dict) or hasattr(obj, "items"): return {k: _deep_copy_dict(v) for k, v in obj.items()}
     return obj
-
 
 try:
     mutable_creds = _deep_copy_dict(st.secrets["credentials"])
@@ -613,7 +522,6 @@ elif auth_status is True:
 
         # ── 📋 SCHEMA ──────────────────────────────────────────
         with st.expander("📋 Schema", expanded=True):
-            # Template selector
             tpl_choice = st.selectbox("Quick Template", list(PROMPT_TEMPLATES.keys()))
             if tpl_choice != "— Select a Template —":
                 tpl = PROMPT_TEMPLATES[tpl_choice]
@@ -660,26 +568,10 @@ elif auth_status is True:
 
         # ── 🧠 EXTRACTION LOGIC ────────────────────────────────
         with st.expander("🧠 Extraction Logic"):
-            st.session_state.user_prompt = st.text_area(
-                "Primary Directive",
-                value=st.session_state.user_prompt,
-                height=120
-            )
-            st.session_state.abbreviations = st.text_area(
-                "Abbreviations Map",
-                value=st.session_state.abbreviations,
-                height=80
-            )
-            st.session_state.extra_rules = st.text_area(
-                "Inclusion Rules",
-                value=st.session_state.extra_rules,
-                height=80
-            )
-            st.session_state.anti_rules = st.text_area(
-                "Exclusion Rules",
-                value=st.session_state.anti_rules,
-                height=60
-            )
+            st.session_state.user_prompt = st.text_area("Primary Directive", value=st.session_state.user_prompt, height=120)
+            st.session_state.abbreviations = st.text_area("Abbreviations Map", value=st.session_state.abbreviations, height=80)
+            st.session_state.extra_rules = st.text_area("Inclusion Rules", value=st.session_state.extra_rules, height=80)
+            st.session_state.anti_rules = st.text_area("Exclusion Rules", value=st.session_state.anti_rules, height=60)
 
         # ── 💾 PROFILE ─────────────────────────────────────────
         with st.expander("💾 Profile"):
@@ -704,6 +596,20 @@ elif auth_status is True:
 
     # ── MAIN CONTENT ─────────────────────────────────────────────
     st.title("CloudResearch Command Center")
+    
+    # EXECUTIVE DASHBOARD
+    if not st.session_state.master_database.empty:
+        m1, m2, m3 = st.columns(3)
+        total_recs = len(st.session_state.master_database)
+        total_cells = st.session_state.master_database.size
+        na_count = (st.session_state.master_database.astype(str).isin(INVALID_VALUES)).sum().sum()
+        completeness = int(((total_cells - na_count) / total_cells) * 100) if total_cells > 0 else 0
+        
+        m1.metric("Total Records", f"{total_recs}")
+        m2.metric("Data Completeness", f"{completeness}%")
+        m3.metric("Current User", f"{username.upper()}")
+        st.divider()
+
     tabs = st.tabs(["📥 Data Entry & Sync", "🔍 Data Explorer"])
     expected_cols = [c.strip() for c in st.session_state.schema_input.split(",") if c.strip()]
     project_tab   = username
@@ -723,15 +629,15 @@ elif auth_status is True:
         # ── SINGLE RECORD ─────────────────────────────────
         if "Single Record" in entry_mode:
             st.info("Upload all documents for one subject. The engine compiles them into a unified profile.")
-            with st.form("single_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader(
-                    "Upload Documents",
-                    type=["png", "jpg", "jpeg", "pdf"],
-                    accept_multiple_files=True
-                )
-                submitted = st.form_submit_button(
-                    f"Process via {selected_model.split(' ')[0]}", type="primary"
-                )
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("single_form", clear_on_submit=True):
+                    uploaded_files = st.file_uploader("Upload Documents", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
+                    submitted = st.form_submit_button(f"Process via {selected_model.split(' ')[0]}", type="primary")
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if submitted and uploaded_files:
                 final_prompt = build_final_prompt(
@@ -756,10 +662,14 @@ elif auth_status is True:
                 progress = st.progress(0, text="Extracting…")
                 for idx, (label, img_bytes) in enumerate(ready_images):
                     progress.progress((idx) / len(ready_images), text=f"Processing: {label}")
+                    preview_container.image(img_bytes, caption=f"Extracting: {label}", use_container_width=True)
+                    
                     raw_json, api_error = blueprint_decoder(
                         img_bytes, st.session_state.schema_input, final_prompt, selected_model
                     )
-                    time.sleep(4.5)  # Rate-limit buffer for Gemini free tier
+                    
+                    # SMART THROTTLE
+                    time.sleep(4.5 if "Gemini" in selected_model else 0.5)
 
                     if api_error:
                         processing_log.append({"file": label, "status": "❌ Failed", "records": 0, "detail": api_error})
@@ -774,15 +684,15 @@ elif auth_status is True:
                         for col in expected_cols:
                             new_val = str(rec.get(col, "N/A")).strip()
                             if is_valid_value(new_val) and not is_valid_value(master_record[col]):
-                                pass  # keep existing
+                                pass
                             elif is_valid_value(new_val):
                                 master_record[col] = new_val
 
                     processing_log.append({"file": label, "status": "✅ OK", "records": len(records), "detail": ""})
 
                 progress.progress(1.0, text="Done.")
+                preview_container.success("Extraction Complete.")
 
-                # Build DataFrame, assign ID, add audit cols
                 new_df = pd.DataFrame([master_record])
                 new_df, warnings = validate_and_clean_dataframe(new_df, expected_cols)
                 new_df = add_audit_columns(new_df, username)
@@ -797,27 +707,23 @@ elif auth_status is True:
                 ) if not st.session_state.master_database.empty else new_df
 
                 st.success(f"Record compiled. Assigned ID: **{new_id}**")
+                for w in warnings: st.warning(w)
 
-                if warnings:
-                    for w in warnings:
-                        st.warning(w)
-
-                # Processing log
                 with st.expander("📋 Processing Log", expanded=True):
                     st.dataframe(pd.DataFrame(processing_log), use_container_width=True, hide_index=True)
 
         # ── BATCH PROCESSING ──────────────────────────────
         elif "Batch Processing" in entry_mode:
             st.info("Upload rosters or multi-subject reports. Each subject receives a unique System_ID.")
-            with st.form("batch_form", clear_on_submit=True):
-                uploaded_files = st.file_uploader(
-                    "Upload Documents",
-                    type=["png", "jpg", "jpeg", "pdf"],
-                    accept_multiple_files=True
-                )
-                submitted = st.form_submit_button(
-                    f"Process Batch via {selected_model.split(' ')[0]}", type="primary"
-                )
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("batch_form", clear_on_submit=True):
+                    uploaded_files = st.file_uploader("Upload Documents", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
+                    submitted = st.form_submit_button(f"Process Batch via {selected_model.split(' ')[0]}", type="primary")
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if submitted and uploaded_files:
                 final_prompt = build_final_prompt(
@@ -843,13 +749,17 @@ elif auth_status is True:
                 roster_suffix = " CRITICAL: Extract EVERY subject as a separate JSON object in the array."
                 for idx, (label, img_bytes) in enumerate(ready_images):
                     progress.progress(idx / len(ready_images), text=f"Analysing: {label}")
+                    preview_container.image(img_bytes, caption=f"Extracting: {label}", use_container_width=True)
+                    
                     raw_json, api_error = blueprint_decoder(
                         img_bytes,
                         st.session_state.schema_input,
                         final_prompt + roster_suffix,
                         selected_model
                     )
-                    time.sleep(4.5)
+                    
+                    # SMART THROTTLE
+                    time.sleep(4.5 if "Gemini" in selected_model else 0.5)
 
                     if api_error:
                         processing_log.append({"file": label, "status": "❌ Failed", "records": 0, "detail": api_error})
@@ -870,6 +780,7 @@ elif auth_status is True:
                     processing_log.append({"file": label, "status": "✅ OK", "records": len(valid_records), "detail": ""})
 
                 progress.progress(1.0, text="Done.")
+                preview_container.success("Batch Extraction Complete.")
 
                 if all_records:
                     batch_df = pd.DataFrame(all_records)
@@ -894,10 +805,8 @@ elif auth_status is True:
                     ) if not st.session_state.master_database.empty else batch_df
 
                     st.success(f"Batch complete. Extracted **{len(batch_df)}** records.")
-                    if dupes_removed:
-                        st.info(f"{dupes_removed} duplicate row(s) removed automatically.")
-                    for w in (warnings or []):
-                        st.warning(w)
+                    if dupes_removed: st.info(f"{dupes_removed} duplicate row(s) removed automatically.")
+                    for w in (warnings or []): st.warning(w)
                 else:
                     st.warning("No valid records were extracted from the uploaded documents.")
 
@@ -907,30 +816,23 @@ elif auth_status is True:
         # ── UPDATE EXISTING ───────────────────────────────
         elif "Update Existing" in entry_mode:
             st.info("Append new documentation to an existing System_ID.")
-            with st.form("update_form", clear_on_submit=True):
-                col1, col2 = st.columns([1, 2])
-                with col1:
-                    target_id = st.text_input("System_ID Reference", placeholder="CR-XXXX")
-                with col2:
-                    update_files = st.file_uploader(
-                        "Upload Appendices",
-                        type=["png", "jpg", "jpeg", "pdf"],
-                        accept_multiple_files=True
-                    )
-                update_submitted = st.form_submit_button(
-                    f"Update via {selected_model.split(' ')[0]}", type="primary"
-                )
+            
+            col_in, col_pre = st.columns([1, 1])
+            with col_in:
+                with st.form("update_form", clear_on_submit=True):
+                    col1, col2 = st.columns([1, 2])
+                    with col1: target_id = st.text_input("System_ID Reference", placeholder="CR-XXXX")
+                    with col2: update_files = st.file_uploader("Upload Appendices", type=["png", "jpg", "jpeg", "pdf"], accept_multiple_files=True)
+                    update_submitted = st.form_submit_button(f"Update via {selected_model.split(' ')[0]}", type="primary")
+            with col_pre:
+                preview_container = st.empty()
+                preview_container.info("Document preview will appear here during extraction.")
 
             if update_submitted:
-                if not target_id:
-                    st.error("System_ID is required.")
-                elif (
-                    st.session_state.master_database.empty
-                    or target_id not in st.session_state.master_database.get("System_ID", pd.Series()).values
-                ):
+                if not target_id: st.error("System_ID is required.")
+                elif (st.session_state.master_database.empty or target_id not in st.session_state.master_database.get("System_ID", pd.Series()).values):
                     st.error(f"System_ID '{target_id}' not found locally. Pull from cloud first.")
-                elif not update_files:
-                    st.error("No documents uploaded.")
+                elif not update_files: st.error("No documents uploaded.")
                 else:
                     final_prompt = build_final_prompt(
                         st.session_state.user_prompt,
@@ -949,17 +851,19 @@ elif auth_status is True:
                                 ready_images.append((f.name, f.getvalue()))
 
                     processing_log: list[dict] = []
-                    row_idx = st.session_state.master_database.index[
-                        st.session_state.master_database["System_ID"] == target_id
-                    ].tolist()[0]
+                    row_idx = st.session_state.master_database.index[st.session_state.master_database["System_ID"] == target_id].tolist()[0]
 
                     progress = st.progress(0, text="Updating record…")
                     for i, (label, img_bytes) in enumerate(ready_images):
                         progress.progress(i / len(ready_images), text=f"Processing: {label}")
+                        preview_container.image(img_bytes, caption=f"Extracting: {label}", use_container_width=True)
+                        
                         raw_json, api_error = blueprint_decoder(
                             img_bytes, st.session_state.schema_input, final_prompt, selected_model
                         )
-                        time.sleep(4.5)
+                        
+                        # SMART THROTTLE
+                        time.sleep(4.5 if "Gemini" in selected_model else 0.5)
 
                         if api_error:
                             processing_log.append({"file": label, "status": "❌ Failed", "records": 0, "detail": api_error})
@@ -981,6 +885,7 @@ elif auth_status is True:
                         processing_log.append({"file": label, "status": "✅ OK", "records": updated_fields, "detail": f"{updated_fields} field(s) updated"})
 
                     progress.progress(1.0, text="Done.")
+                    preview_container.success("Update Complete.")
                     st.success(f"Record **{target_id}** updated.")
 
                     with st.expander("📋 Processing Log", expanded=True):
@@ -1009,12 +914,9 @@ elif auth_status is True:
                 elif not active_sheet_url:
                     st.error("No Google Sheet URL configured.")
                 else:
-                    # Final dedup pass before commit
                     st.session_state.master_database, dupes = remove_duplicates(st.session_state.master_database)
-                    if dupes:
-                        st.info(f"Removed {dupes} duplicate(s) before commit.")
+                    if dupes: st.info(f"Removed {dupes} duplicate(s) before commit.")
 
-                    # Ensure all expected columns exist
                     final_cols = ["System_ID"] + [c for c in expected_cols if c.lower() != "system_id"]
                     for col in final_cols:
                         if col not in st.session_state.master_database.columns:
@@ -1040,8 +942,7 @@ elif auth_status is True:
 
         with col_pull_btn:
             if st.button("⬇️ Pull from Cloud", use_container_width=True):
-                if not active_sheet_url:
-                    st.error("No Google Sheet URL configured.")
+                if not active_sheet_url: st.error("No Google Sheet URL configured.")
                 else:
                     with st.spinner("Downloading from cloud…"):
                         try:
@@ -1073,7 +974,6 @@ elif auth_status is True:
         else:
             df = st.session_state.master_database.copy()
 
-            # Standardise placeholders and attempt numeric coercion
             for col in df.columns:
                 if df[col].dtype == object:
                     df[col] = df[col].astype(str).str.strip()
@@ -1085,13 +985,10 @@ elif auth_status is True:
 
             all_cols = [c for c in df.columns if c != "System_ID"]
 
-            # ── SEARCH & FILTER ───────────────────────────
             st.markdown("#### 🔍 Search & Filter")
             search_col1, search_col2 = st.columns([2, 1])
-            with search_col1:
-                global_search = st.text_input("Global search (searches all columns)", placeholder="Type to filter rows…")
-            with search_col2:
-                filter_col = st.selectbox("Filter by column", ["— None —"] + all_cols)
+            with search_col1: global_search = st.text_input("Global search (searches all columns)", placeholder="Type to filter rows…")
+            with search_col2: filter_col = st.selectbox("Filter by column", ["— None —"] + all_cols)
 
             filter_df = df.copy()
 
@@ -1102,60 +999,39 @@ elif auth_status is True:
                 filter_df = filter_df[mask]
 
             if filter_col != "— None —":
-                unique_vals = sorted(
-                    filter_df[filter_col].dropna().astype(str).unique().tolist()
-                )
+                unique_vals = sorted(filter_df[filter_col].dropna().astype(str).unique().tolist())
                 selected_vals = st.multiselect(f"Values for '{filter_col}'", unique_vals, default=unique_vals[:10] if len(unique_vals) > 10 else unique_vals)
-                if selected_vals:
-                    filter_df = filter_df[filter_df[filter_col].astype(str).isin(selected_vals)]
+                if selected_vals: filter_df = filter_df[filter_df[filter_col].astype(str).isin(selected_vals)]
 
             st.caption(f"Showing **{len(filter_df)}** of **{len(df)}** records.")
             st.dataframe(filter_df, use_container_width=True, hide_index=True)
 
             st.divider()
 
-            # ── GROUPING ──────────────────────────────────
             st.markdown("#### 📊 Grouping & Counts")
             group_col = st.selectbox("Group by", ["— None —"] + all_cols, key="group_sel")
             if group_col != "— None —":
-                group_counts = (
-                    filter_df[group_col]
-                    .astype(str)
-                    .value_counts()
-                    .reset_index()
-                )
+                group_counts = filter_df[group_col].astype(str).value_counts().reset_index()
                 group_counts.columns = [group_col, "Count"]
                 group_counts = group_counts[group_counts[group_col] != "N/A"]
                 st.dataframe(group_counts, use_container_width=True, hide_index=True)
 
             st.divider()
 
-            # ── VISUALISATION ─────────────────────────────
             st.markdown("#### 📈 Visualisation")
             viz_col1, viz_col2 = st.columns(2)
-            with viz_col1:
-                x_axis = st.selectbox("Categorical Axis (X)", all_cols, key="x_sel")
-            with viz_col2:
-                y_axis = st.selectbox("Numerical Axis (Y)", all_cols, key="y_sel")
+            with viz_col1: x_axis = st.selectbox("Categorical Axis (X)", all_cols, key="x_sel")
+            with viz_col2: y_axis = st.selectbox("Numerical Axis (Y)", all_cols, key="y_sel")
 
             chart_type = st.radio("Chart Type", ["Bar", "Pie", "Scatter"], horizontal=True)
 
             try:
-                chart_df = filter_df[
-                    ~filter_df[x_axis].astype(str).isin(["N/A", "nan"])
-                    & ~filter_df[y_axis].astype(str).isin(["N/A", "nan"])
-                ].copy()
-
-                if chart_df.empty:
-                    st.warning("No plottable data with current filters.")
+                chart_df = filter_df[~filter_df[x_axis].astype(str).isin(["N/A", "nan"]) & ~filter_df[y_axis].astype(str).isin(["N/A", "nan"])].copy()
+                if chart_df.empty: st.warning("No plottable data with current filters.")
                 else:
-                    if chart_type == "Bar":
-                        fig = px.bar(chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
-                    elif chart_type == "Pie":
-                        fig = px.pie(chart_df, names=x_axis, title=f"Distribution of {x_axis}")
-                    else:
-                        fig = px.scatter(chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
-
+                    if chart_type == "Bar": fig = px.bar(chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} by {x_axis}")
+                    elif chart_type == "Pie": fig = px.pie(chart_df, names=x_axis, title=f"Distribution of {x_axis}")
+                    else: fig = px.scatter(chart_df, x=x_axis, y=y_axis, color=x_axis, title=f"{y_axis} vs {x_axis}")
                     st.plotly_chart(fig, use_container_width=True)
             except Exception as exc:
                 st.warning(f"Visualisation failed: {exc}")
